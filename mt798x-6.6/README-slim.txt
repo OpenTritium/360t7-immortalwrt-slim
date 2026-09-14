@@ -248,3 +248,66 @@ chroot 内 /proc 不可用，odhcpd 本体起不来（fopen /proc/net/ipv6_route
    mt798x-6.12/README-slim.txt 第十一轮补记。
 
 实测：sysupgrade.bin 14,172,956 字节，sha256 43ded935…（两次构建一致）。
+
+【第十一轮补正：按 OpenWrt 官方口径复核 IPv6 中继（2026-09-14）】
+复核来源：odhcpd 上游 README 的选项表（权威）、OpenWrt 25.12+ 的
+NDP Relay 实践文（littlenewton.uk，含 f0d8553 修复与完整 uci 配置）、
+OpenWrt 论坛多个 relay 实例。结论：配置结构正确，但上一轮漏了一条链，
+且有几处需要写清楚依据。
+
+■ 官方/社区的标准 relay 配置（多来源一致）
+    dhcp.wan6: master=1, ra=relay, ndp=relay
+    dhcp.lan:  ra=relay, ndp=relay
+
+■ 我的配置与它的差异，及依据
+1. 用 hybrid 而非 relay。
+   官方示例面向"确定没有 PD"的固定场景；hybrid 是 README 明确列出的合法取值
+   （ra/dhcpv6 为 disabled|server|relay|hybrid，ndp 为 disabled|relay|hybrid）。
+   odhcpd 的 odhcpd_reload() 里 hybrid 按"master 有没有 ipv6-prefix"二选一：
+   有 PD → LAN 走 server（等同原行为），无 PD → LAN 走 relay。同一条固件
+   两种组网都对，且运营商改了配置也不会失联。这是刻意优于官方示例的地方。
+2. 补 dhcpv6 链（上一轮漏配，本轮加上）。
+   ra / dhcpv6 / ndp 在 odhcpd 里是三个独立开关（config.c 各自解析、各自判
+   hybrid）。只配 ra+ndp 时，src/router.c 会走这一段：
+       /* Rewrite M/O flags unless we relay DHCPv6 */
+       if (c->dhcpv6 != MODE_RELAY) {
+           adv->nd_ra_flags_reserved &= ~(ND_RA_FLAG_MANAGED | ND_RA_FLAG_OTHER);
+           adv->nd_ra_flags_reserved |= c->ra_flags & (MANAGED|OTHER);   // 默认 other-config
+       }
+   即把上游的 M/O 抹掉再按本地 ra_flags 重写。上游若是 stateful（RA 置 M、
+   PIO 不带 A），LAN 设备既不能 SLAAC（无 A）也不会去要 DHCPv6（M 被抹）
+   ——一个地址都拿不到。加上 dhcpv6=relay 后 M/O 原样透传，DHCPv6 也中继。
+   中继实现核对 src/dhcpv6.c relay_client_request()：slave 收到客户端请求后
+   封装 Relay-Forward，发往 **master 接口上的 ff05::1:3**（ALL_DHCPV6_SERVERS），
+   不需要显式服务器地址；因此 master 侧也必须开 dhcpv6（我的配置两侧都开了）。
+   （注意：README 里的 dhcpv6_relay_servers 选项在本版 odhcpd 中尚不存在。）
+3. 显式写出 ra_slaac=1 与 ndproxy_routing=1。两者本就是 odhcpd 默认值
+   （ra_slaac 默认 1、ndproxy_routing 默认 1），写出来是固化意图 + 防上游改默认。
+4. ignore=1 保留。核对两树 odhcpd 源码：wan6 段的 UCI `ignore` 选项 odhcpd
+   根本不读（6.6 版 config.c 里连这个字段都没有，6.12 版仅出现在 host 段的
+   ip/iid="ignore" 值判断）。它只服务 dnsmasq 的 --no-dhcp-interface，无副作用。
+
+■ 关于"前缀分配"的取舍（为什么是 relay 不是再切子网）
+SLAAC 的最小分配单元就是 /64（IID 占满 64 位），无法从上游给的单个 /64 里
+再切出子前缀给 LAN —— 这正是必须用 NDP/RA 中继的原因，也是官方文档把 relay
+描述为"in case no delegated prefixes are available"的场景。本固件的处理：
+  有 PD   → LAN 走 server，按委派前缀 + 网络配置里的 ip6assign 正常分配；
+  无 PD   → LAN 走 relay，LAN 设备直接取用**与上游同一个 /64** 内的地址，
+            经本机三层转发，无 NAT、无二次分配。
+
+■ 主接口
+dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没有 master
+时 hybrid 会整体回落 server。
+
+■ 运行时验证（qemu-user + binfmt_misc + 嵌套 userns/netns，真实 rootfs）
+做了对照实验，两个都是可观测的硬证据：
+  A 显式 relay：odhcpd 日志 "Enabling services with lan0/wan0 running"，
+    且内核 /proc/sys/net/ipv6/conf/lan0/proxy_ndp 由 0 变 **1**
+    —— NDP 中继确实初始化了；全程无 "Invalid ... mode" 报错，选项名/值合法。
+  B 我的 hybrid（用 -u 禁用 ubus）：proxy_ndp 保持 0，回落 server ——
+    与源码一致。
+  B 顺带暴露一个必须写明的依赖：hybrid→relay 需要 ubus（config.c 里
+  `if (config.use_ubus && !ubus_has_prefix(...))`）。真机上 ubusd 常驻，
+  满足条件；万一无 ubus，回落 server 是安全侧，不会配出半吊子中继。
+  odhcpd 本体无法在容器里完整跑起 relay 转发（netifd 在测试环境起不来接口
+  对象，relay 的端到端转发未实测），此项如实标注为源码级结论。

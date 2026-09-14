@@ -10,7 +10,7 @@
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
 | 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
-| 产物 |  186 包 / 14.17MB / sha256 `83d7a1a8…` |  164 包 / 15.76MB / sha256 `e6d4f62f…` |
+| 产物 |  186 包 / 14.17MB / sha256 `32f3e7db…` |  164 包 / 15.76MB / sha256 `c19a3b2f…` |
 
 ## 成绩单（相对社区原版 full 固件）
 
@@ -43,13 +43,18 @@ IPv6 与内网穿透按实际组网场景做了预置（见下节）。
 
 落地点（两树一致）：
 
-- `etc/uci-defaults/99-ipv6-passthrough` — `dhcp.lan.ra/ndp=hybrid`，并把 `wan6` 设为 relay master
+- `etc/uci-defaults/99-ipv6-passthrough` — `dhcp.lan` 与 `dhcp.wan6` 的 **ra / dhcpv6 / ndp 三条链**均设 hybrid，
+  `wan6` 设 relay master；`ra_slaac=1`（保留上游 PIO 的 A 位让 LAN 设备 SLAAC）与 `ndproxy_routing=1` 显式固化
 - `etc/sysctl.d/98-ipv6-wan.conf` — `net.ipv6.conf.wan.accept_ra=2`（转发开启时内核会忽略 `=1`，
   必须用 2，否则路由器自己都拿不到上游地址）
 - `etc/uci-defaults/99-upnp-enable` — UPnP IGD / NAT-PMP / PCP 默认开启
 
 产物可复现：两树都做了位级确定性构建（连跑两次 sha256 完全相同），
 详见各自 `README-slim.txt` 的第十一轮。
+
+三条链缺一不可：`ra` 中继 RA、`ndp` 代理邻居、`dhcpv6` 保住中继 RA 的 M/O 位——
+只配前两条时，上游若为 stateful（RA 置 M、PIO 不带 A），odhcpd 会抹掉 M/O，
+LAN 设备既不能 SLAAC 也不会要 DHCPv6，一个地址都拿不到。
 
 **UPnP 默认开启**是为内网设备自建的 tailscale：走 UPnP/NAT-PMP/PCP 拿到 IPv4 直连，
 而不是长期挂在 DERP 中继上。上游包默认 `enabled=0`（每次刷机都要手点），此处改为默认开；

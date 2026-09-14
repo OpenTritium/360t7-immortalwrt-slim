@@ -5,11 +5,21 @@
 #   上游下发 DHCPv6-PD  → master 不进入 relay，LAN 仍按 server 正常下发委派前缀
 #                        （与改动前完全一致）
 #   上游只给一个 /64 而无 PD（光猫路由模式的典型情况）
-#                      → LAN 自动降级为 relay：把上游 RA 中继到 LAN、
-#                        清掉 PIO 的 L 位使 LAN 设备经本机做网关，
-#                        ndp relay 代理邻居关系，配合 odhcpd 默认的
-#                        learn_routes=1 装 /128 回程路由；LAN 设备由此
-#                        直接拿到上游 /64 的全局地址，端到端无 NAT。
+#                      → LAN 降级为 relay，把上游的地址配置原样透传到 LAN。
+#
+# 【为什么三条链都要配】odhcpd 的 ra / dhcpv6 / ndp 是三个独立开关
+# （src/config.c 里各自解析、各自判 hybrid），少配任何一条都会让部分上游失效：
+#   ra     中继上游 RA。中继时强制清 PIO 的 L（on-link）位，使 LAN 设备
+#          必须经本机转发；配合 ra_slaac=1 保留 A 位，设备可 SLAAC 出地址。
+#   dhcpv6 中继 DHCPv6 并保住中继 RA 的 M/O 位。上游若是 stateful
+#          （RA 置 M、PIO 不带 A），不配这条会被 src/router.c 抹掉 M/O：
+#          LAN 设备既不能 SLAAC（无 A）也不会去要 DHCPv6（M 被抹）
+#          ——一个地址都拿不到。
+#   ndp    邻居发现代理。LAN 设备的上游 /64 地址对本机是 off-link，需要
+#          代理应答 NS，并按 learn_routes 装 /128 回程路由。
+#
+# 【主接口】relay 必须指明哪侧是上游：dhcp.wan6.master='1'。
+# relay 只在 master 与 slave 之间转发，没有 master 则整体回落 server。
 #
 # 段名为什么是 wan6：odhcpd 判断"有没有 PD"走的是 ubus 的 ipv6-prefix，
 # 而该属性挂在 dhcpv6 客户端接口（wan6）上，不在 wan 上；
@@ -20,17 +30,24 @@
 
 touch /etc/config/dhcp
 
-# LAN：按上游情况自动在 server / relay 间选择
+# ---- LAN：relay 的 slave 侧，按上游情况自动在 server / relay 间选择 ----
 uci -q set dhcp.lan.ra='hybrid'
+uci -q set dhcp.lan.dhcpv6='hybrid'
 uci -q set dhcp.lan.ndp='hybrid'
+# 保留中继 PIO 的 A 位（允许下游 SLAAC）。odhcpd.defaults 也设 1，此处固化意图。
+uci -q set dhcp.lan.ra_slaac='1'
+# 为代理的邻居装 /128 回程路由（odhcpd 的 learn_routes，默认即 1）。
+uci -q set dhcp.lan.ndproxy_routing='1'
 
-# WAN：relay 的 master 段。ignore 只服务 dnsmasq（odhcpd 不认这个选项，
-# 它按 ra/dhcpv6/ndp 是否 enabled 自行决定要不要接管该接口）。
+# ---- WAN：relay 的 master 侧 ----
+# ignore 只服务 dnsmasq（odhcpd 不认这个选项，它按 ra/dhcpv6/ndp 是否
+# enabled 自行决定要不要接管该接口）。
 uci -q set dhcp.wan6=dhcp
 uci -q set dhcp.wan6.interface='wan6'
 uci -q set dhcp.wan6.ignore='1'
 uci -q set dhcp.wan6.master='1'
 uci -q set dhcp.wan6.ra='hybrid'
+uci -q set dhcp.wan6.dhcpv6='hybrid'
 uci -q set dhcp.wan6.ndp='hybrid'
 
 uci -q commit dhcp
