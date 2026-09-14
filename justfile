@@ -11,9 +11,18 @@ root := justfile_directory()
 default:
     @just --list
 
-[doc("在指定树执行 make 目标（默认 world 全量构建）")]
+[doc("在指定树执行 make 目标（默认 world 全量构建；REVISION 钉自 archive 留底 git，版本号确定性）")]
 build tree *args="world":
-    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} make -j{{jobs}} {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rev=""
+    case "{{tree}}" in
+        mt798x-6.6)  gd="{{root}}/archive/mt798x-6.6.git" ;;
+        mt798x-6.12) gd="{{root}}/archive/mt798x-6.12.git" ;;
+        *) gd="" ;;
+    esac
+    [ -z "$gd" ] || rev=$(git --git-dir="$gd" rev-parse --short=8 HEAD)
+    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} make -j{{jobs}} ${rev:+REVISION=$rev} {{args}}
 
 [doc("6.6 稳定基线：全量构建（默认）")]
 build66 *args="world":
