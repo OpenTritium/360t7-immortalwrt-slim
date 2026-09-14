@@ -1,0 +1,25 @@
+--- a/mt_wifi/embedded/common/sniffer_radiotap.c
++++ b/mt_wifi/embedded/common/sniffer_radiotap.c
+@@ -576,5 +576,5 @@
+ #endif
+ #endif
+-	netif_rx_ni(pOSPkt);
++	netif_rx(pOSPkt);
+ #ifdef SNIFFER_MT7615_RMAC_INC
+ 	os_free_mem(rmac_info_buffer);
+@@ -1128,5 +1128,5 @@
+ 	pOSPkt->protocol = __constant_htons(ETH_P_80211_RAW);
+ 	pOSPkt->ip_summed = CHECKSUM_NONE;
+-	netif_rx_ni(pOSPkt);
++	netif_rx(pOSPkt);
+ 	return;
+ err_free_sk_buff:
+--- a/mt_wifi/os/linux/rt_profile.c
++++ b/mt_wifi/os/linux/rt_profile.c
+@@ -1611,5 +1611,5 @@
+ 		RELEASE_NDIS_PACKET(pAd, pPacket, NDIS_STATUS_FAILURE);
+ 	else
+-		netif_rx_ni(pOSPkt);
++		netif_rx(pOSPkt);
+ 
+ }

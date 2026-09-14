@@ -1,0 +1,9 @@
+# 首次启动时向 U-Boot bootargs 追加 mitigations=off（A53 上收益很小，但无副作用）
+# 环境不满足（无 fw_printenv/无 bootargs 变量）时静默跳过
+if command -v fw_printenv >/dev/null 2>&1 && fw_printenv bootargs >/dev/null 2>&1; then
+	case "$(fw_printenv -n bootargs 2>/dev/null)" in
+		*mitigations=off*) ;;
+		*) fw_setenv bootargs "$(fw_printenv -n bootargs 2>/dev/null) mitigations=off" ;;
+	esac
+fi
+exit 0
