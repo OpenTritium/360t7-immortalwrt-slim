@@ -47,10 +47,10 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 14 核全量约半小时，工具链与 dl 缓存跨次复用：
 
 ```sh
-just build66      # 6.6 稳定线
-just build612     # 6.12 新线
-just smoke66      # 冒烟：树内全新编译 dnsmasq
-just builder      # 重建自包含构建器镜像（FROM ubuntu:24.04）
+just build66 / build612             # 6.6 稳定线 / 6.12 新线 全量构建
+just pick66 / pick612 sysupgrade    # 取刷机镜像到 out/（或 initramfs=救砖镜像 / all）
+just smoke66                        # 冒烟：树内全新编译 dnsmasq
+just builder                        # 重建自包含构建器镜像（FROM ubuntu:24.04）
 ```
 
 构建在 rootless docker 容器内进行（镜像 v3，dpkg 集合与原镜像逐一比对一致），
