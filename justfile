@@ -3,7 +3,7 @@
 #   mt798x-6.12 = 新线   （ImmortalWrt 25.12 / 内核 6.12.103 / mtkhnat）
 set shell := ["bash", "-c"]
 
-img  := "mt798x-builder:24.04-v2"
+img  := "mt798x-builder:24.04-v3"
 jobs := `nproc`
 root := justfile_directory()
 
@@ -23,18 +23,30 @@ build66 *args="world":
 build612 *args="world":
     @just build mt798x-6.12 {{args}}
 
-[doc("冒烟：6.6 仅编译 dnsmasq 验证工具链")]
+[doc("冒烟：在指定树全新编译 dnsmasq（验证工具链 + 热路径编译参数）")]
+smoke tree:
+    @just build {{tree}} "package/network/services/dnsmasq/clean package/network/services/dnsmasq/compile"
+
+[doc("冒烟：6.6 稳定基线")]
 smoke66:
-    @just build mt798x-6.6 "package/network/services/dnsmasq/clean package/network/services/dnsmasq/compile"
+    @just smoke mt798x-6.6
 
-[doc("冒烟：6.12 增量校验（全缓存应秒过）")]
+[doc("冒烟：6.12 新线")]
 smoke612:
-    @just build mt798x-6.12 "world"
+    @just smoke mt798x-6.12
 
-[doc("清理指定树构建产物（保留工具链/dl 缓存/固件产物）")]
+[doc("清理指定树构建产物（容器内执行，可删 root 属主残留；保留工具链/dl 缓存/固件产物）")]
 clean tree:
-    rm -rf {{root}}/{{tree}}/build_dir {{root}}/{{tree}}/tmp {{root}}/{{tree}}/logs
+    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs
 
-[doc("重建 docker 构建器镜像")]
+[doc("清理 6.6 构建产物")]
+clean66:
+    @just clean mt798x-6.6
+
+[doc("清理 6.12 构建产物")]
+clean612:
+    @just clean mt798x-6.12
+
+[doc("重建 docker 构建器镜像（自包含，FROM ubuntu:24.04）")]
 builder:
-    docker build -t {{img}} -f docker/Dockerfile.builder {{root}}
+    docker build -t {{img}} -f {{root}}/docker/Dockerfile.builder {{root}}/docker
