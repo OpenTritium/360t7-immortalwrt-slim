@@ -30,3 +30,16 @@
   HZ_100 保留；kmod-dummy（hnat-detect 用）/kmod-ifb（eqos 用）为真依赖；
   HNAT 走 vendor hook_toggle 路径开机自启，与 nft flowtable 无关。
 - 实测：sysupgrade.itb 16.5MB（16,507,146 字节，sha256 9524362f…，159 包；卸掉加固税后较第七轮再瘦约 44KB）。
+
+【第九轮：内核 bump 尝试与跟随策略（2026-09-14）】
+- 尝试 6.12.103 → .109/.108：失败，根因是补丁集分叉。429 三件套
+  （v6.18 spinand dirmap 重构）已被 .105+ stable 原生吸收（tarball 抽验
+  spinand_create_rdesc 等已在），其余 pending/backport 补丁与
+  ImmortalWrt master 有约 80 处结构性分歧，逐个适配等于接手整个补丁集维护。
+- 决策：内核小版本跟随 zheshifandian 上游（当前 .103，8/16 批量 bump
+  .97→.103）；他 bump 我们重放他的适配提交，不做 kernel.org 抢跑。
+- CachyOS 补丁盘点：唯一适用项 BBRv3 已在用；BORE 调度器评估后放弃
+  （路由器转发走 softirq，不经过 CFS/EEVDF，纯增分叉）；zstd 库换血
+  （18.6k 行）、cachy 大礼包、fixes 均为 x86/桌面向，全部不适用。
+- 顺带修复：导入时漏 add 的 .gitignore 已补上（树内新文件此前不会
+  出现在 git status）。
