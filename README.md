@@ -10,21 +10,21 @@
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
 | 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
-| 产物 |  197 包 / 14.75MB / sha256 `efb5dd90…` |  159 包 / 16.5MB / sha256 `38c87059…` |
+| 产物 |  186 包 / 14.16MB / sha256 `539b6e45…` |  164 包 / 15.75MB / sha256 `f879bfb5…` |
 
 ## 成绩单（相对社区原版 full 固件）
 
 | 项 | 原 full 版 | 本项目 | 怎么做到的 |
 |---|---|---|---|
-| 固件体积 | 17.2MB | **14.75MB** | 八轮裁剪 + zstd-19 squashfs |
-| 软件包数 | 306 | **197 / 159** | USB/存储/代理/DDNS 全栈清退，每个幸存包反查过依赖 |
-| 拥塞控制 | BBRv1 | **BBRv3** | CachyOS 官方回移植（6.6/6.12 两版），内建默认 |
+| 固件体积 | 17.2MB | **14.16MB / 15.75MB** | 九轮裁剪 + zstd-19 squashfs |
+| 软件包数 | 306 | **186 / 164** | USB/存储/代理/DDNS 全栈清退，每个幸存包反查过依赖 |
+| 拥塞控制 | BBRv1 | **BBRv3 + fq pacing** | CachyOS 官方回移植（6.6/6.12 两版），内建默认 |
 | NAT 转发 | 软转发 | **硬件卸载** | vendor HNAT（有线）+ WHNAT/WARP（无线）+ fullcone |
 | 编译参数 | 全树一刀切 | **逐包分层** | 热路径 -O2+LTO，冷路径 -Os，`-mcpu=cortex-a53`，全二进制 sstrip |
-| 内核杂税 | 服务器级默认 | **归零** | cgroups/MPTCP/io_uring/swap/加固项全部关闭，mitigations=off |
+| 内核杂税 | 服务器级默认 | **归零** | cgroups/MPTCP/io_uring/swap/BPF/加固项全部关闭，mitigations=off |
 
-顺带修了一个社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic——
-不做第八轮审计，BBRv3 设了也白设。
+顺带修了两个社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic；
+以及 BBRv3 设了却因内核缺 `sch_fq` 而失去 pacing 队列——两个都让"设了等于没设"。
 
 ## 设备
 
@@ -58,7 +58,7 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 
 ## 文档
 
-- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 八轮优化全过程：裁剪清单、BBRv3 移植、
-  KERNEL_ 通道清扫、分层参数、BBR 覆盖 bug 修复
+- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 九轮优化全过程：裁剪清单、BBRv3 移植、
+  KERNEL_ 通道清扫、分层参数、BBR 覆盖 bug 修复、fq pacing 补装
 - [`mt798x-6.12/README-slim.txt`](mt798x-6.12/README-slim.txt) — 新线移植记录（PRECAL/netif_rx 补丁、
-  mtkhnat 契约差异）与同步的对齐策略
+  mtkhnat 契约差异）、UPnP 栈补齐与同步的对齐策略

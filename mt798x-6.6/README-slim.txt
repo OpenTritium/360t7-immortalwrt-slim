@@ -4,8 +4,8 @@
 本目录产物 = 之前 selfbuild-immortalwrt-mt798x-6.6（full 版）的裁剪优化版。
 
 【与 full 版对比】
-- 软件包：306 → 197 个（-109）
-- sysupgrade.bin：17.2MB → 14.8MB
+- 软件包：306 → 186 个（-120）
+- sysupgrade.bin：17.2MB → 14.16MB
 - 纯净性：0 个代理/ddns 类组件（passwall/ssr/clash/v2ray/xray/homeproxy/ddns 全无）
 
 【裁剪内容】
@@ -139,3 +139,48 @@ POSIX mqueue、L3 master dev、BLK_DEV_THROTTLING（真凶即此通道）。
 - WiFi 硬件卸载链确认：WHNAT_SUPPORT=m + WARP_V2=y（ax3000 种子配置就位）。
 - 包清单复核：kmod-dummy（hnat-detect 探测用）、kmod-ifb（eqos 限速用）
   均为真依赖。实测：sysupgrade.bin 14.75MB（14,746,398 字节，sha256 f9fbb481…，197 包，尺寸与第七轮持平——本轮只改开机默认值不改代码体积）。
+
+【第九轮：死配置清算 + 死重清退（2026-09-14）】
+本轮目标从"继续砍体积"转为"先确保每一项都已生效"——第八轮那个 BBR 覆盖 bug
+说明"配置写了不等于生效"，于是把 sysctl / 内核选项 / 包依赖逐条与运行期对齐。
+
+1. fq pacing 补装（真 bug，与第八轮同类）：
+   /etc/sysctl.d/99-perf-tuning.conf 一直设 net.core.default_qdisc=fq，但两树内核
+   都是 # CONFIG_NET_SCH_FQ is not set（默认 fq_codel）——写 sysctl 不报错，静默
+   回落。BBRv3 因此一直没有 pacing 队列。修复：target/linux/mediatek/filogic/
+   config-6.6|6.12 显式 CONFIG_NET_SCH_FQ=y。核验：vmlinux 符号 fq_qdisc_ops
+   已内建（两树各 1 处）。
+2. 死 sysctl 清理：10-default.conf（base-files）里的 net.core.bpf_jit_enable=1 /
+   bpf_jit_kallsyms=1 两树 BPF_JIT 均为 n，纯死配置，删。
+3. conntrack 双写消除：package/kernel/linux/files/sysctl-nf-conntrack.conf 写
+   100000，99-perf-tuning.conf 写 65536，按文件名序后者生效——100000 是障眼法，
+   统一为 65536。
+4. dnsmasq DNSSEC 编译项关闭（CONFIG_PACKAGE_dnsmasq_full_dnssec=n）：
+   /etc/config/dhcp 全程无 dnssec/trust-anchor 选项（authoritative 1 属 auth 特性，
+   与 dnssec 无关）。连带退出 libnettle + libhogweed + libgmp 三包（ELF NEEDED
+   反查确认只服务 dnsmasq）。核验：新 dnsmasq 的 NEEDED 只剩
+   libubox/libubus/libgcc/libc，无 libnettle。要 DNSSEC 时重建即可。
+5. 6.6 无使用者死重清退（provides 感知反查逐个确认依赖为空）：
+   libncurses + terminfo（385K+36K，仅服务已裁掉的 gdb/tmon/fdisk 类）、
+   iw、switch、regs、mii_mgr、mhz、libatomic、libcap。
+   其中 mhz 的真正引入通道是 package/emortal/autocore/Makefile 里
+   `+(TARGET_mediatek||TARGET_mvebu):mhz`——cpuinfo 对 mediatek 分支写死
+   cpu_freq=""，从不调用 mhz，属模板残留，已从 DEPENDS 摘除。
+   注意保留 ethtool：其包依赖反查为空，但 /sbin/smp.sh 的 disable_gro_fraglist
+   运行期调用它（未声明的隐式依赖），属"必须留"。
+6. 6.6 OPENSSL_OPTIMIZE_SPEED 对齐（此前被显式关成 n，6.12 默认 y）：
+   package/libs/openssl/Makefile 会把 TARGET_CFLAGS 的 -O% 换成 -O3。
+   代价实测 +219KB（压缩后 libcrypto 1274K→1493K），换本机 TCP 的 TLS 握手
+   （LuCI https / apk / wget）提速，属有意识取舍。
+7. 6.12 内核死码对齐：BPF_SYSCALL=BPF_JIT=n（6.6 第四轮已关，6.12 漏了）。
+8. 6.6 内核配置纳入版本管理：.gitignore 增加 !/.config——此前两树的 .config
+   都不在 git 里，"确定性重建"其实依赖工作区残留。现两树 .config 均已入库。
+9. 结论性盘点（本轮不改）：KALLSYMS_UNCOMPRESSED=y 来自 include/kernel-defaults.mk
+   的硬编码，非本树可配；模块 .ko 未剥符号（实测剥掉全树只省 19KB 压缩，
+   而 oops 里会失去模块符号，不值得，弃）；CPU_FREQ/THERMAL 虽= y 但 MT7981 DTS
+   无 opp-hz/cpu-thermal 节点（只有 mt7987.dtsi 有），属死码但不值得动 DTS。
+
+实测：sysupgrade.bin 14,746,396 → 14,162,716 字节（-570KiB，sha256 539b6e45…），
+包数 197 → 186（-11）；rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。
+注：仍为静态核验（NEEDED/符号/包清单/产物哈希）——MT7981 无 QEMU 机型，
+真机启动验证需刷机，与本项目既有验证口径一致。

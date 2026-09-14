@@ -43,3 +43,37 @@
   （18.6k 行）、cachy 大礼包、fixes 均为 x86/桌面向，全部不适用。
 - 顺带修复：导入时漏 add 的 .gitignore 已补上（树内新文件此前不会
   出现在 git status）。
+
+【第十轮：UPnP 栈补齐 + 与 6.6 的对齐清扫（2026-09-14）】
+本轮首要项是功能缺口：6.12 线此前没有 UPnP（miniupnpd / luci-app-upnp 均
+未选），与 6.6 线不一致。其余为与 6.6 第九轮同批的对齐/死配置清算。
+
+1. UPnP 补齐（新增 7 包）：miniupnpd-nftables（nftables 变体，非 iptables）、
+   luci-app-upnp、luci-i18n-upnp-zh-cn，连带 libcap-ng / libuuid1 /
+   libpthread / librt。核验 rootfs：/usr/sbin/miniupnpd（NEEDED =
+   libnftnl/libmnl/libcap-ng/libuuid/libc）、/etc/init.d/miniupnpd、
+   /etc/config/upnpd、/usr/share/nftables.d/{table-post,chain-post/forward,
+   chain-post/srcnat,chain-post/dstnat}/20-miniupnpd.nft、
+   www/luci-static/resources/view/upnp/upnp.js + menu/acl json 齐备。
+   enabled 缺省 0（与 6.6 一致，LuCI 里开启）。
+2. fq pacing 补装（与 6.6 第九轮同一 bug）：99-perf-tuning.conf 设
+   net.core.default_qdisc=fq，但内核 # CONFIG_NET_SCH_FQ is not set，
+   BBRv3 pacing 一直缺队列。修复：filogic/config-6.12 显式 CONFIG_NET_SCH_FQ=y。
+3. 内核死码对齐 6.6 第四轮：CONFIG_BPF_SYSCALL / CONFIG_BPF_JIT 关。
+   核验：新内核 .config 中二者均 not set，vmlinux 含 fq_qdisc_ops。
+4. dnsmasq DNSSEC 编译项关闭 → libnettle / libhogweed / libgmp 三包退出
+   （与 6.6 同处理；/etc/config/dhcp 无 dnssec 选项）。
+5. 死 sysctl 清理：10-default.conf 的 bpf_jit_enable / bpf_jit_kallsyms
+   （BPF_JIT=n，纯死配置）。
+6. 6.6 内核配置入库口径同步：.gitignore 增加 !/.config，两树 .config 纳入 git。
+7. 结论性盘点：libstdcpp6（~513KB 压缩）唯一持有者是 l1util→libl1parser（C++），
+   而 l1util 只被 /etc/hotplug.d/net/09-fix-mtwifi-mac 调用来写 WiFi MAC——
+   摘它要改写该 hotplug 并连带摘 l1parser 三件套，风险（写错 MAC = 设备身份错）
+   大于收益，留待单独一轮；tc-tiny 只服务 eqos 槽位 32+ 的软件整形
+   （1–31 走硬件 HQoS），保留；模块 .ko 未剥符号（全树仅省 19KB 压缩，
+   代价是 oops 丢模块符号，弃）。
+
+实测：sysupgrade.itb 16,507,144 → 15,753,480 字节（-736KiB，sha256 f879bfb5…），
+包数 159 → 164（+5 净：加 UPnP 7 包、减 nettle/gmp/hogweed 3 包，另 libcap-ng
+等转入）；**在新增整个 UPnP 栈的同时仍比上一轮小 736KiB**。
+rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。

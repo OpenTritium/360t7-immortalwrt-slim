@@ -558,6 +558,14 @@ CONFIG_ZSTD_DECOMPRESS=y
 CONFIG_NET_MEDIATEK_HNAT=y
 CONFIG_SQUASHFS_ZSTD=y
 
+# 360T7 slim：与 6.6 树对齐的无用内建子系统裁剪（无 BPF 用户、无 2.5G 口）
+# CONFIG_BPF_SYSCALL is not set
+# CONFIG_BPF_JIT is not set
+# CONFIG_MEDIATEK_2P5GE_PHY is not set
+
+# BBR 需要 fq 做 pacing（default_qdisc=fq 在缺此内核选项时是死配置）
+CONFIG_NET_SCH_FQ=y
+
 # BBRv3 独苗（CachyOS 6.12 补丁），内建 + 内核默认
 CONFIG_TCP_CONG_BBR=y
 CONFIG_DEFAULT_BBR=y
