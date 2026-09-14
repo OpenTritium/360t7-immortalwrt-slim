@@ -1,4 +1,4 @@
-# 360T7M 固件工作区
+# 360t7m-immortalwrt-slim — 360T7M（MT7981B）自编译固件工作区
 #   mt798x-6.6  = 稳定基线（ImmortalWrt 24.10 / 内核 6.6.133 / mt_wifi 7.6.6.1）
 #   mt798x-6.12 = 新线   （ImmortalWrt 25.12 / 内核 6.12.103 / mtkhnat）
 set shell := ["bash", "-c"]
