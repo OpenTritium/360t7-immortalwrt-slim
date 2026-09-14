@@ -73,7 +73,9 @@
    （1–31 走硬件 HQoS），保留；模块 .ko 未剥符号（全树仅省 19KB 压缩，
    代价是 oops 丢模块符号，弃）。
 
-实测：sysupgrade.itb 16,507,144 → 15,753,480 字节（-736KiB，sha256 bdb5cbe4…，REVISION d2bfc033），
+实测：sysupgrade.itb 16,507,144 → 15,753,480 字节（-736KiB）
 包数 159 → 164（+5 净：加 UPnP 7 包、减 nettle/gmp/hogweed 3 包，另 libcap-ng
 等转入）；**在新增整个 UPnP 栈的同时仍比上一轮小 736KiB**。
 rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。
+（产物 sha256 见顶层 README.md 与 out/——镜像内嵌 REVISION 取决于本文件所在提交，
+故不在本文件内自引用哈希）
