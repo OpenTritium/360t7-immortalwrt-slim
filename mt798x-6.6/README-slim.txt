@@ -180,7 +180,7 @@ POSIX mqueue、L3 master dev、BLK_DEV_THROTTLING（真凶即此通道）。
    而 oops 里会失去模块符号，不值得，弃）；CPU_FREQ/THERMAL 虽= y 但 MT7981 DTS
    无 opp-hz/cpu-thermal 节点（只有 mt7987.dtsi 有），属死码但不值得动 DTS。
 
-实测：sysupgrade.bin 14,746,396 → 14,162,716 字节（-570KiB，sha256 539b6e45…），
+实测：sysupgrade.bin 14,746,396 → 14,162,716 字节（-570KiB，sha256 cf2c257c…，REVISION c2439926），
 包数 197 → 186（-11）；rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。
 注：仍为静态核验（NEEDED/符号/包清单/产物哈希）——MT7981 无 QEMU 机型，
 真机启动验证需刷机，与本项目既有验证口径一致。
