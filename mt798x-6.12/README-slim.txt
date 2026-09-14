@@ -79,3 +79,60 @@
 rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。
 （产物 sha256 见顶层 README.md 与 out/——镜像内嵌 REVISION 取决于本文件所在提交，
 故不在本文件内自引用哈希）
+
+【第十一轮：IPv6 透传 + UPnP 默认开启（2026-09-14）】
+与 6.6 树同批同实现（详细论证见 mt798x-6.6/README-slim.txt 第十一轮）。
+场景：局域网设备自带 tailscale（要 UPnP/NAT-PMP/PCP 拿 IPv4 直连）；
+拿不到光猫超管密码 → 改不了桥接 → 无 DHCPv6-PD，只有光猫 RA 的一个 /64。
+
+1. odhcpd hybrid 透传（etc/uci-defaults/99-ipv6-passthrough）：
+   dhcp.lan.ra/ndp=hybrid + dhcp.wan6={interface wan6, ignore 1, master 1,
+   ra hybrid, ndp hybrid}。段名必须用 wan6 而非 wan——odhcpd 判断"有无 PD"
+   读的是 ubus 的 ipv6-prefix，挂在 dhcpv6 客户端接口上。有 PD 则 LAN 走
+   server（等同改动前），无 PD 则 LAN 降级 relay（中继 RA + 清 on-link 位 +
+   NDP 代理 + /128 回程路由）。wan6 未上线时回落 server，不会失联。
+   本树 odhcpd 版本 2026.06.29（6.6 树为 2025.10.02），两版 hybrid 逻辑一致
+   （均含 ubus_has_prefix 门控），已逐行比对确认。
+2. WAN accept_ra=2（etc/sysctl.d/98-ipv6-wan.conf）：forwarding=1 时内核忽略
+   accept_ra=1，只有 2 生效（ip-sysctl.rst）。
+3. UPnP 默认开（etc/uci-defaults/99-upnp-enable）：配合上一轮新装的
+   miniupnpd-nftables 栈，省掉每次刷机手点。
+
+实测：sysupgrade.itb 15,753,480 字节（尺寸不变——三处新增均为文本，
+落在 squashfs 已满 256K 块内），包数 164 不变，sha256 见顶层 README.md。
+
+【第十一轮补记：位级确定性构建（2026-09-14）】
+上一轮 README 写了"确定性重建成立"，实测推翻——每次构建镜像哈希都变。
+逐层定位后修掉三处，两树现已位级可复现（连跑两次 sha256 完全相同）。
+
+1. 内核 banner 嵌入 docker 容器 ID。
+   CONFIG_KERNEL_BUILD_USER / CONFIG_KERNEL_BUILD_DOMAIN 为空时，
+   内核回落到 whoami@hostname，而构建在容器里跑 → banner 变成
+   `root@e358215914db`，容器 ID 每次不同。修复：两树 .config 钉死
+   CONFIG_KERNEL_BUILD_USER="360t7m-slim" / CONFIG_KERNEL_BUILD_DOMAIN="build"。
+   核验：两个不同容器的构建产出同一个 Image 哈希。
+
+2. SOURCE_DATE_EPOCH 依赖脚本 mtime。
+   scripts/get_source_date_epoch.sh 在无 version.date、无 git 时回落到
+   try_mtime（脚本自身 mtime = 克隆时间），跨机器不可复现。
+   修复：两树各放 name.version.date（OpenWrt 标准机制，优先于 git/mtime）。
+
+3. apk 包内嵌构建墙钟时间（仅 6.12）。
+   这是最隐蔽的一处：PKG_SOURCE_DATE_EPOCH 对 luci 等"无源码日期"的包会
+   回落到 get_source_date_epoch.sh 的 try_mtime（= 构建时刻），而
+   include/package-pack.mk 把它导出为 SOURCE_DATE_EPOCH。apk 的
+   apk_get_build_time()（apk-tools src/common.c）一旦发现该环境变量非空，
+   就对【所有】文件统一返回它，于是 .apk 内每个文件的 mtime = 构建时刻。
+   首次尝试用 find -exec touch -hcd 钉 staging 目录 mtime —— 完全无效，
+   因为 apk 根本不读文件 mtime。
+   修复（一行）：include/package-pack.mk 的导出改为
+     export SOURCE_DATE_EPOCH=$$(if $(SOURCE_DATE_EPOCH),$(SOURCE_DATE_EPOCH),$$(PKG_SOURCE_DATE_EPOCH))
+   即优先用全局固定的 SDE。核验：luci-base 连续三次 clean 重建 apk 位相同；
+   全树 124 个 apk 跨两次构建全部相同。
+
+6.6 树走 opkg，ipkg-build 已有 --mtime/$SOURCE_DATE_EPOCH + --sort=name，
+故只有第 1、2 两处适用。
+
+实测（同一 REVISION 连跑两次，字节与哈希均相同）：
+  6.6  sysupgrade.bin 14,172,956 字节  sha256 43ded935…
+  6.12 sysupgrade.itb 15,757,576 字节  sha256 40eea99e…

@@ -185,3 +185,66 @@ POSIX mqueue、L3 master dev、BLK_DEV_THROTTLING（真凶即此通道）。
 其值取决于本文件所在提交，故不在本文件内自引用哈希）；rootfs 全量 ELF NEEDED 闭包审计 0 悬空依赖。
 注：仍为静态核验（NEEDED/符号/包清单/产物哈希）——MT7981 无 QEMU 机型，
 真机启动验证需刷机，与本项目既有验证口径一致。
+
+【第十一轮：IPv6 透传 + UPnP 默认开启（2026-09-14）】
+场景驱动：局域网设备自带 tailscale（依赖 UPnP/NAT-PMP/PCP 拿 IPv4 直连，
+否则长期挂 DERP 中继）；且拿不到光猫超管密码 → 改不了桥接 → 没有 DHCPv6-PD，
+ISP 只经光猫 RA 下发一个 /64。
+
+1. odhcpd hybrid 透传（package/base-files/files/etc/uci-defaults/99-ipv6-passthrough）：
+   先查清"是否拿到 PD"这件事挂在哪——读 odhcpd 源码 src/config.c 的
+   odhcpd_reload()/ubus_has_prefix() 确认：判断走 ubus 的 ipv6-prefix 属性，
+   而该属性挂在 dhcpv6 客户端接口（wan6）上，不在 wan 上。所以 master 段
+   必须写成 dhcp.wan6.interface='wan6'，写成 wan 会让 master 永远判成
+   "无 PD"，在 PD 场景下误入 relay。
+   - dhcp.lan.ra='hybrid' / dhcp.lan.ndp='hybrid'
+   - dhcp.wan6 = { interface wan6, ignore 1, master 1, ra hybrid, ndp hybrid }
+   行为自动分档：有 PD → master 不入 relay，LAN 走 server（等同改动前）；
+   无 PD（光猫路由模式） → LAN 降级 relay：中继上游 RA 到 LAN、清 PIO 的
+   on-link 位（odhcpd 显式 `&~ND_OPT_PI_FLAG_ONLINK`，使 LAN 设备经本机做网关）、
+   ndp relay 做邻居代理 + learn_routes 默认 1 装 /128 回程路由。
+   核验 relay 路径不夹带 server 侧的 max_preferred/valid_lifetime 钳制
+   （那是 send_router_advert 里的，relay 只改 flags 不碰 lifetime）——
+   上游 RA 的 30 分钟 preferred 直接原样透传，不会把全局地址提前作废。
+   安全回落：wan6 未上线 → master 缺失 → LAN 的 hybrid 解析回 server，即原行为。
+2. WAN 接受上游 RA（etc/sysctl.d/98-ipv6-wan.conf）：
+   net.ipv6.conf.wan.accept_ra=2。内核文档 ip-sysctl.rst 明确：forwarding=1 时
+   accept_ra=1 被忽略，只有 2（Overrule forwarding behaviour）才生效——
+   本项目 net.ipv6.conf.all.forwarding=1 恒开，所以只能是 2，否则路由器自己
+   拿不到上游地址，relay 也就无源可继。
+3. UPnP 默认开（etc/uci-defaults/99-upnp-enable）：上游包 enabled 缺省 0，
+   每次刷机要手点；改默认 1。secure_mode/perm_rule 保持上游不动。
+
+验证方式（本轮新增手段）：借助 qemu-user-static + binfmt_misc + user
+namespace chroot，把真实 rootfs 跑起来执行 uci-defaults，核验生成后的 UCI
+配置（见下）。无法验证的部分如实记录：qemu 缺 MT7981 机型、且 userns 下
+chroot 内 /proc 不可用，odhcpd 本体起不来（fopen /proc/net/ipv6_route 失败），
+故 relay 的**运行时**行为仍为源码级论证，非实机观测。
+
+实测：sysupgrade.bin 14,162,716 → 14,172,956 字节（+10,240，三个新文件与
+文本），包数 186 不变，sha256 见顶层 README.md。
+
+【第十一轮补记：位级确定性构建（2026-09-14）】
+上一轮 README 写了"确定性重建成立"，实测推翻——每次构建镜像哈希都变。
+逐层定位后修掉两处（本树走 opkg，无 apk 那处问题），现已位级可复现
+（同一 REVISION 连跑两次，字节与 sha256 完全相同）。
+
+1. 内核 banner 嵌入 docker 容器 ID。
+   CONFIG_KERNEL_BUILD_USER / CONFIG_KERNEL_BUILD_DOMAIN 为空时，内核回落到
+   whoami@hostname，而构建在容器里跑 → banner 变成 `root@e358215914db`，
+   容器 ID 每次不同。修复：本树 .config 钉死
+   CONFIG_KERNEL_BUILD_USER="360t7m-slim" / CONFIG_KERNEL_BUILD_DOMAIN="build"。
+   核验：两个不同容器构建产出同一个 Image 哈希。
+
+2. SOURCE_DATE_EPOCH 依赖脚本 mtime。
+   scripts/get_source_date_epoch.sh 在无 version.date、无 git 时回落到
+   try_mtime（脚本自身 mtime = 克隆时间），跨机器不可复现。
+   修复：本树放 version.date（OpenWrt 标准机制，优先于 git/mtime）。
+
+3. 6.12 的 apk 打包另有"包内嵌构建墙钟时间"的问题（PKG_SOURCE_DATE_EPOCH
+   回落到 try_mtime 后又被导出为 SOURCE_DATE_EPOCH，apk 见该变量非空即对
+   所有文件统一盖章）。本树用 opkg，ipkg-build 已有
+   --mtime/$PKG_SOURCE_DATE_EPOCH + --sort=name，故不适用；细节见
+   mt798x-6.12/README-slim.txt 第十一轮补记。
+
+实测：sysupgrade.bin 14,172,956 字节，sha256 43ded935…（两次构建一致）。

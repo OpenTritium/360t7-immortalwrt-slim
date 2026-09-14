@@ -1,0 +1,37 @@
+#!/bin/sh
+# IPv6 透传（odhcpd hybrid 模式）——应对"光猫路由模式 + 拿不到超级管理员密码"
+#
+# 行为自动分档，两种上游都能跑：
+#   上游下发 DHCPv6-PD  → master 不进入 relay，LAN 仍按 server 正常下发委派前缀
+#                        （与改动前完全一致）
+#   上游只给一个 /64 而无 PD（光猫路由模式的典型情况）
+#                      → LAN 自动降级为 relay：把上游 RA 中继到 LAN、
+#                        清掉 PIO 的 L 位使 LAN 设备经本机做网关，
+#                        ndp relay 代理邻居关系，配合 odhcpd 默认的
+#                        learn_routes=1 装 /128 回程路由；LAN 设备由此
+#                        直接拿到上游 /64 的全局地址，端到端无 NAT。
+#
+# 段名为什么是 wan6：odhcpd 判断"有没有 PD"走的是 ubus 的 ipv6-prefix，
+# 而该属性挂在 dhcpv6 客户端接口（wan6）上，不在 wan 上；
+# 写成 wan 会让 master 永远判成"无 PD"从而在 PD 场景下误入 relay。
+#
+# 安全回落：wan6 不存在/未上线时 master 缺失，LAN 的 hybrid 解析为 server，
+# 即改动前的原行为。
+
+touch /etc/config/dhcp
+
+# LAN：按上游情况自动在 server / relay 间选择
+uci -q set dhcp.lan.ra='hybrid'
+uci -q set dhcp.lan.ndp='hybrid'
+
+# WAN：relay 的 master 段。ignore 只服务 dnsmasq（odhcpd 不认这个选项，
+# 它按 ra/dhcpv6/ndp 是否 enabled 自行决定要不要接管该接口）。
+uci -q set dhcp.wan6=dhcp
+uci -q set dhcp.wan6.interface='wan6'
+uci -q set dhcp.wan6.ignore='1'
+uci -q set dhcp.wan6.master='1'
+uci -q set dhcp.wan6.ra='hybrid'
+uci -q set dhcp.wan6.ndp='hybrid'
+
+uci -q commit dhcp
+exit 0

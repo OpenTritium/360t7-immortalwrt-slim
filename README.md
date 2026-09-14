@@ -10,7 +10,7 @@
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
 | 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
-| 产物 |  186 包 / 14.16MB / sha256 `ae758806…` |  164 包 / 15.75MB / sha256 `3d0d0920…` |
+| 产物 |  186 包 / 14.17MB / sha256 `83d7a1a8…` |  164 包 / 15.76MB / sha256 `e6d4f62f…` |
 
 ## 成绩单（相对社区原版 full 固件）
 
@@ -23,8 +23,37 @@
 | 编译参数 | 全树一刀切 | **逐包分层** | 热路径 -O2+LTO，冷路径 -Os，`-mcpu=cortex-a53`，全二进制 sstrip |
 | 内核杂税 | 服务器级默认 | **归零** | cgroups/MPTCP/io_uring/swap/BPF/加固项全部关闭，mitigations=off |
 
-顺带修了两个社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic；
-以及 BBRv3 设了却因内核缺 `sch_fq` 而失去 pacing 队列——两个都让"设了等于没设"。
+顺带修了两个"设了等于没设"的社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic；
+BBRv3 设了却因内核缺 `sch_fq` 而没有 pacing 队列。
+
+IPv6 与内网穿透按实际组网场景做了预置（见下节）。
+
+## IPv6 透传与内网穿透（针对光猫路由模式预置）
+
+两种上游形态下都开箱即用，无需进 LuCI 手配：
+
+| 上游形态 | 行为 |
+|---|---|
+| 光猫桥接 / 运营商下发 DHCPv6-PD | LAN 走 odhcpd `server`，按委派前缀下发（等同社区默认） |
+| **光猫路由模式、拿不到超管密码、无 PD** | LAN 自动降级 `relay`：中继上游 RA、清 PIO 的 on-link 位、NDP 代理 + 路由学习 |
+
+第二行是这套预置的主要目的：拿不到光猫超管密码就改不了桥接，ISP 只经光猫 RA 下发一个 /64。
+`odhcpd` 的 hybrid 模式按"上游到底有没有 PD"自动二选一，因此**同一条固件在两种组网下都对**，
+不依赖手工切换，也不会在运营商改配置后失联。
+
+落地点（两树一致）：
+
+- `etc/uci-defaults/99-ipv6-passthrough` — `dhcp.lan.ra/ndp=hybrid`，并把 `wan6` 设为 relay master
+- `etc/sysctl.d/98-ipv6-wan.conf` — `net.ipv6.conf.wan.accept_ra=2`（转发开启时内核会忽略 `=1`，
+  必须用 2，否则路由器自己都拿不到上游地址）
+- `etc/uci-defaults/99-upnp-enable` — UPnP IGD / NAT-PMP / PCP 默认开启
+
+产物可复现：两树都做了位级确定性构建（连跑两次 sha256 完全相同），
+详见各自 `README-slim.txt` 的第十一轮。
+
+**UPnP 默认开启**是为内网设备自建的 tailscale：走 UPnP/NAT-PMP/PCP 拿到 IPv4 直连，
+而不是长期挂在 DERP 中继上。上游包默认 `enabled=0`（每次刷机都要手点），此处改为默认开；
+`secure_mode=1` 与"默认拒绝 + 仅放行 1024-65535"的 perm_rule 保持上游原样——映射只对发起请求的那台主机生效。
 
 ## 设备
 

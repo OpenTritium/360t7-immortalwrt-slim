@@ -1,0 +1,15 @@
+#!/bin/sh
+# UPnP IGD / NAT-PMP / PCP 默认开启。
+#
+# 局域网设备自带 tailscale 等 P2P 组件时，UPnP/NAT-PMP/PCP 是拿到 IPv4
+# 直接连接（而非走 DERP 中继）的关键；上游包默认 enabled=0，
+# 每次刷机都要进 LuCI 手动打开，这里改为默认开。
+#
+# secure_mode=1 与"默认拒绝 + 仅放行 1024-65535"的 perm_rule 由上游
+# /etc/config/upnpd 保留不动：映射只对发起请求的那台主机生效。
+[ -f /etc/config/upnpd ] || exit 0
+[ "$(uci -q get upnpd.config.enabled)" = "1" ] && exit 0
+
+uci -q set upnpd.config.enabled='1'
+uci -q commit upnpd
+exit 0
