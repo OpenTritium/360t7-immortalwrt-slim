@@ -311,3 +311,51 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   满足条件；万一无 ubus，回落 server 是安全侧，不会配出半吊子中继。
   odhcpd 本体无法在容器里完整跑起 relay 转发（netifd 在测试环境起不来接口
   对象，relay 的端到端转发未实测），此项如实标注为源码级结论。
+
+【第十一轮补正二：无上游时为何回落 server，以及 relay 触发条件（2026-09-14）】
+
+■ 回落是上游的显式设计（src/config.c 的 hybrid 解析）
+    i->ra     = (master && master->ra     == MODE_RELAY) ? MODE_RELAY : MODE_SERVER;
+    i->dhcpv6 = (master && master->dhcpv6 == MODE_RELAY) ? MODE_RELAY : MODE_SERVER;
+    i->ndp    = (master && master->ndp    == MODE_RELAY) ? MODE_RELAY : MODE_DISABLED;
+  注意 ndp 回落的是 DISABLED —— 上游也认为"无上游时代理无意义"；
+  而 ra/dhcpv6 回落 SERVER，即完全等同于原版 OpenWrt 的 LAN 行为。
+
+■ 而且这个回落并非无意义：odhcpd 会优雅降级
+  实测（qemu + netns + 真实 rootfs，给 lan0 一个 ULA）odhcpd 日志：
+      rfc9096: lan0: add fd12:3456:789a:1::1/64
+      No default route present, setting ra_lifetime to 0!
+  对应 src/router.c:878（server 模式专有，relay 不走这段）：
+      if (default_route && valid_prefix)
+          adv.h.nd_ra_router_lifetime = htons(ra_lifetime ...);
+      else
+          adv.h.nd_ra_router_lifetime = 0;   /* 明确宣告"我不是默认路由" */
+  即：LAN 设备仍能 SLAAC 出 ULA（本机管理、mDNS、LAN 内服务可用），
+  但路由器把 RA 的 router lifetime 置 0，设备不会把它当默认网关，
+  因而不会把全局流量黑洞。这是刻意的安全降级。
+  同一测试中抓到的 RA 为 M=0 O=1，与上述一致。
+
+■ 为什么用 SERVER 而非 DISABLED 作为回落
+  1. 等同原版行为，最少意外；
+  2. 模式在每次 reload 时重新解析，wan6 一上线（无 PD → master=RELAY）
+     LAN 即自动切到 relay，开机顺序或 WAN 瞬断都不需要人工干预；
+  3. 若回落 DISABLED，WAN 短暂中断会连带把 LAN 的本地 IPv6 也拆掉。
+
+■ relay 的触发条件（本场景关键，已核实）
+  odhcp6c 把 RA 派生的 /64 与 DHCPv6-PD 前缀分别导出为两个变量
+  （src/script.c: PREFIXES ← PD；RA_ADDRESSES ← RA 的 A 位 /64）。
+  OpenWrt 的 lib/netifd/dhcpv6.script 映射为：
+      PREFIXES     -> proto_add_ipv6_prefix  -> netifd 的 ipv6-prefix
+      RA_ADDRESSES -> proto_add_ipv6_address -> netifd 的 ipv6-address
+      RA 的 /64 只有当 mask=64 且 PREFIXES 为空且 EXTENDPREFIX=1 时才
+      额外上报为 ipv6-prefix（RFC 7278 的 extendprefix 选项，默认不开）。
+  odhcpd 的 ubus_has_prefix() 查的正是 ipv6-prefix，于是：
+      光猫路由模式（只有 RA /64、无 PD）-> wan6 有 ipv6-address、无 ipv6-prefix
+                                        -> master=RELAY -> LAN=relay   ✓
+      运营商下发 PD                    -> ipv6-prefix 存在
+                                        -> master 非 relay -> LAN=server ✓
+  两种组网都自动落到正确的分支。
+
+  ⚠️ 坑：若给 wan6 设了 option extendprefix '1'，RA 的 /64 会被上报为
+  ipv6-prefix，odhcpd 便误判为"有 PD"，relay 永不激活。本固件不设该项，
+  将来也不要设。
