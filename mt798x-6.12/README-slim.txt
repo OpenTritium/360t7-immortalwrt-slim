@@ -27,7 +27,8 @@
   HARDENED_USERCOPY、SCHED_STACK_END_CHECK、SLAB_FREELIST_HARDENED/RANDOM、
   ARM64_SW_TTBR0_PAN 全部关闭（generic/config-6.12）。
 - 审计结论：CPU_IDLE/cpufreq 全关 = 无 DVFS 全程最高频率（即最强性能档）；
-  HZ_100 保留；kmod-dummy（hnat-detect 用）/kmod-ifb（eqos 用）为真依赖；
+  HZ_100 保留；kmod-dummy（hnat-detect 用）为真依赖；kmod-ifb（eqos 用）
+  第十四轮随 eqos 一并移除；
   HNAT 走 vendor hook_toggle 路径开机自启，与 nft flowtable 无关。
 - 实测：sysupgrade.itb 16.5MB（16,507,146 字节，sha256 9524362f…，159 包；卸掉加固税后较第七轮再瘦约 44KB）。
 
@@ -66,11 +67,14 @@
 5. 死 sysctl 清理：10-default.conf 的 bpf_jit_enable / bpf_jit_kallsyms
    （BPF_JIT=n，纯死配置）。
 6. 6.6 内核配置入库口径同步：.gitignore 增加 !/.config，两树 .config 纳入 git。
-7. 结论性盘点：libstdcpp6（~513KB 压缩）唯一持有者是 l1util→libl1parser（C++），
-   而 l1util 只被 /etc/hotplug.d/net/09-fix-mtwifi-mac 调用来写 WiFi MAC——
-   摘它要改写该 hotplug 并连带摘 l1parser 三件套，风险（写错 MAC = 设备身份错）
-   大于收益，留待单独一轮；tc-tiny 只服务 eqos 槽位 32+ 的软件整形
-   （1–31 走硬件 HQoS），保留；模块 .ko 未剥符号（全树仅省 19KB 压缩，
+7. 结论性盘点：libstdcpp6（~513KB 压缩）唯一持有者是 l1util→libl1parser（C++）。
+   第十四轮用 readelf 复核后**订正**：libiwinfo.so.20230701 本身就有硬
+   DT_NEEDED → libl1parser.so（iwinfo 的 C 源 iwinfo_mtk_l1util.c 调用
+   l1_get_chip_id_by_ifname/get_devname），且 l1parser 是 netifd 的 WiFi 上报
+   路径（mtwifi.uc 与 netifd/wireless/mtwifi.sh 都 l1parser.open()）——
+   不是「改一个 hotplug 就能摘」而是 fork vendored WiFi 链路，已决定放弃。
+   tc-tiny 只服务 eqos 槽位 32+ 的软件整形（1–31 走硬件 HQoS），第十四轮随
+   eqos 整体移除；模块 .ko 未剥符号（全树仅省 19KB 压缩，
    代价是 oops 丢模块符号，弃）。
 
 实测：sysupgrade.itb 16,507,144 → 15,753,480 字节（-736KiB）
@@ -317,3 +321,58 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   6.6  14,142,236 字节  sha256 41915e1c…
   6.12 15,720,712 字节  sha256 dd7152d9…
 两树构建均 exit 0。
+
+【第十四轮：包与 feed 精简（2026-09-15）】
+取证方法：解析已构建产物的包数据库（apk `lib/apk/db/installed`，
+带 `o:` origin 字段可定位每个包的 feed 来源）做 reverse-dependency 闭包，
+`readelf -d` 核 ELF NEEDED，再把真 rootfs 放进 qemu-user chroot 实跑。
+
+■ 1. feed 层：删 routing / telephony / video
+  证据：apk 数据库的 origin 统计 = base 138 / packages 3 / luci 23，
+  routing·telephony·video 各 0 个包。本树 telephony 甚至从未 clone 成功
+  （feeds/ 下只剩 telephony.tmp/），构建照样通过，证明其贡献为 0。
+  改动：feeds.conf.default 只留 packages 与 luci。
+  packages feed 只贡献 3 个包（miniupnpd 等），luci feed 23 个；
+  不需要 `feeds install -a` 全量灌，但保留 install -a 以免 feed 升级时
+  漏装新的传递依赖（体积不进固件，只影响 feeds/ 目录）。
+
+■ 2. eqos 限速整体移除
+  本树的 luci-app-eqos-mtk 是 nft 重写版（DEPENDS = +tc +nftables
+  +kmod-sched-core +kmod-ifb +kmod-mediatek_hnat），功能可用；移除是为与 6.6
+  对齐（6.6 那个是坏的，见该树说明）并省体积：
+  tc-tiny（压缩 142KB）+ kmod-sched-core + kmod-ifb + sch_htb/sch_hfsc/
+  sch_tbf/sch_ingress + act_*/cls_* 全套流量整形模块（实测修复后 rootfs 内
+  sch_*.ko / act_*.ko / ifb.ko 归零）。
+  如将来要恢复 per-IP/MAC 限速：勾回 luci-app-eqos-mtk 即可，其依赖会自动带回。
+
+■ 3. 主题：本树未装 luci-theme-argon，维持 bootstrap（与 6.6 统一后两树一致）
+
+■ 4. 结论：不做的项（含此前判断的订正）
+  libstdcpp6（压缩 513KB）——**放弃**。第十轮曾记「l1util 只被
+  /etc/hotplug.d/net/09-fix-mtwifi-mac 调用来写 MAC，摘它要改写该 hotplug」，
+  本轮用 readelf 订正：libiwinfo.so.20230701 自身硬 DT_NEEDED → libl1parser.so
+  （iwinfo 的 C 源 iwinfo_mtk_l1util.c 调用 l1_get_chip_id_by_ifname/
+  by_devname），且 l1parser 是 netifd 的 WiFi 上报路径（lib/wifi/mtwifi.uc 与
+  lib/netifd/wireless/mtwifi.sh 都 `l1parser.open()`）。
+  摘它等于 fork vendored iwinfo C 模块 + 用 ucode 重写 L1 profile 解析，
+  风险（WiFi 起不来）远大于 513KB，放弃。
+  wpad-openssl（730KB）/ openssl core（1.97MB）为深依赖，不划算。
+
+■ 验证（真 rootfs 实跑）
+  qemu-user chroot 执行产物内 /www/cgi-bin/luci（ucode）：
+    未改动 rootfs → LuCI 正常分发并返回自己的 500 页（chroot 无 ubusd/rpcd）；
+    仅 stub 3 个必须依赖常驻 daemon 的调用后 → 403 + **完整渲染登录表单**
+    （luci_username/luci_password/Log in/cascade.css 齐备，
+    <title>OpenWrt | Overview</title>）。
+  说明界面链路在移除 eqos / tc 后完好。
+
+实测（干净克隆流程，distclean 后构建）：
+  6.12 15,458,568 字节  sha256 84cd39bf…  159 包
+  （对照：上轮干净克隆 15,720,712 字节 / 164 包 → -256KiB / -5 包）
+两树构建均 exit 0。
+
+■ 构建期踩坑
+  parallel 跑两树 world（-j7 ×2，14 核）会让 6.6 的 toolchain/gdb 在
+  libiberty/regex.c 上失败（configure 探针 ac_cv_type_pid_t 被判 no，
+  进而 `#define pid_t int` 与系统 typedef 冲突）。属宿主竞争，
+  串行重建即通过。本机请勿同时跑两树。

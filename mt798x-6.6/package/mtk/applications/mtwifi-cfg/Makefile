@@ -12,12 +12,16 @@ PKG_RELEASE:=2
 
 include $(INCLUDE_DIR)/package.mk
 
+# 上游漏声明的三个硬依赖，缺一即 mtwifi_cfg 起不来（WiFi 拉不起）：
+#   +lua              mtwifi_cfg / l1util 的 shebang 是 #!/usr/bin/lua
+#   +luci-lib-nixio   mtwifi_cfg / l1dat_parser.lua 里 require("nixio")
+#   +lua-cjson        require("cjson")
 define Package/mtwifi-cfg
   SECTION:=MTK Properties
   CATEGORY:=MTK Properties
   SUBMENU:=Applications
   TITLE:=mtwifi configure scripts for mt798x
-  DEPENDS:=+iwinfo +wifi-dats +lua-cjson +datconf-lua  
+  DEPENDS:=+iwinfo +wifi-dats +lua-cjson +datconf-lua +lua +luci-lib-nixio
 endef
 
 define Package/mtwifi-wapp

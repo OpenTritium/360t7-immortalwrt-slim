@@ -65,12 +65,14 @@ DEFAULT_PACKAGES.tweak:=\
 	block-mount \
 	default-settings-chn \
 	kmod-nf-nathelper \
-	kmod-nf-nathelper-extra \
 	luci-light \
-	luci-app-package-manager \
-	luci-compat \
-	luci-lib-base \
-	luci-lib-ipkg
+	luci-app-package-manager
+
+# 说明：上游此处还列了 luci-compat / luci-lib-base / luci-lib-ipkg（Lua 版 LuCI
+# 兼容层）。本树全部界面（LuCI 服务端 + 主题 + 各 app）都是 ucode/JS 实现，
+# rootfs 里不存在任何 .lua controller/view，故三者无消费者，已移除。
+# 若保留，任何一次 `make defconfig` 都会把它们重新拉回 .config
+# （CONFIG_DEFAULT_luci-* → CONFIG_PACKAGE_luci-*）。
 
 ifneq ($(DUMP),)
   all: dumpinfo

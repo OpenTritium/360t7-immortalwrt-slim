@@ -22,9 +22,11 @@
 4. 其他：shellsync（多拨同步工具，已从 ppp 的 select 中摘除）、kmod-mppe、
    kmod-macvlan、kmod-dummy、kmod-tun、kmod-zram/zram-swap、kmod-phy-aquantia
    （360T7 无 2.5G 独立 PHY）、kmod-crypto-user、libopenssl-legacy、
-   luci-theme-bootstrap（保留 argon 主主题）、dnsmasq 的 dnstap/tftp 编译项。
-   wireguard（应用户要求移除，含 udptunnel 依赖）、upnp、eqos 限速、HNAT/turboacc、MTK 全栈、web 升级
-   （luci-app-package-manager）均保留。
+   luci-theme-bootstrap、dnsmasq 的 dnstap/tftp 编译项。
+   wireguard（应用户要求移除，含 udptunnel 依赖）、upnp、HNAT/turboacc、MTK 全栈、
+   web 升级（luci-app-package-manager）均保留。
+   注：本轮（第一轮）曾「保 luci-theme-bootstrap、留 argon 主主题」，
+   第十四轮改为删 argon 走 bootstrap，理由见该轮记录。
 
 【编译参数（第七轮起分层）】
 - 优化级别：内核 -O2；用户态全局 -Os -pipe -mcpu=cortex-a53 -fno-plt；
@@ -55,7 +57,8 @@ iptables（防火墙是 nft/firewall4），属于"死但必要"的最小保留�
 - dnsmasq 的 conntrack/nftset 编译功能（DNS 策略分流用，纯路由不需要），
   连带裁掉 libnetfilter-conntrack + kmod-nf-conntrack-netlink。
 - 保留的真依赖：libuuid1（miniupnpd 用）、libopenssl-legacy（wpad-openssl 用）、
-  kmod-lib-crc-ccitt（ppp 栈用）、kmod-lib-textsearch（nathelper ALG 用）。
+  kmod-lib-crc-ccitt（ppp 栈用）、kmod-lib-textsearch（nathelper ALG 用；
+  第十四轮随 nathelper-extra 移除）。
 - 内核加固清扫：ARM64_SW_TTBR0_PAN、SLAB_FREELIST_RANDOM/HARDENED、
   HARDENED_USERCOPY、SCHED_STACK_END_CHECK 全部关闭（叠加此前的
   STACKPROTECTOR/FORTIFY_SOURCE）。
@@ -138,7 +141,7 @@ POSIX mqueue、L3 master dev、BLK_DEV_THROTTLING（真凶即此通道）。
   开机自动置 1，不依赖 nft flowtable，防火墙配置无需加 flow_offloading。
 - WiFi 硬件卸载链确认：WHNAT_SUPPORT=m + WARP_V2=y（ax3000 种子配置就位）。
 - 包清单复核：kmod-dummy（hnat-detect 探测用）、kmod-ifb（eqos 限速用）
-  均为真依赖。实测：sysupgrade.bin 14.75MB（14,746,398 字节，sha256 f9fbb481…，197 包，尺寸与第七轮持平——本轮只改开机默认值不改代码体积）。
+  均为真依赖（第十四轮随 eqos 一并移除）。实测：sysupgrade.bin 14.75MB（14,746,398 字节，sha256 f9fbb481…，197 包，尺寸与第七轮持平——本轮只改开机默认值不改代码体积）。
 
 【第九轮：死配置清算 + 死重清退（2026-09-14）】
 本轮目标从"继续砍体积"转为"先确保每一项都已生效"——第八轮那个 BBR 覆盖 bug
@@ -429,3 +432,101 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   6.6  14,142,236 字节  sha256 41915e1c…
   6.12 15,720,712 字节  sha256 dd7152d9…
 两树构建均 exit 0。
+
+【第十四轮：包与 feed 精简（2026-09-15）】
+取证方法：不只看 .config，而是解析已构建产物里的包数据库
+（opkg `usr/lib/opkg/status`、apk `lib/apk/db/installed`）做反向依赖闭包，
+再用 `readelf -d` 核 ELF NEEDED，最后把真实 rootfs 放进 qemu-user chroot 跑。
+
+■ 1. feed 层：routing / telephony / video 零贡献，已删
+  证据：6.12 apk 数据库的 `o:` origin 统计为 base 138 / packages 3 / luci 23，
+  routing·telephony·video 各 0；6.6 manifest 与 routing(29 包)/telephony(38 包)
+  的包名交集为空。6.12 树里 telephony 甚至从未 clone 成功（只剩 telephony.tmp/），
+  构建照样过——说明这三条 feed 对固件 0 字节贡献。
+  改动：两树 feeds.conf.default 删多余行（6.6 删 routing+telephony，
+  6.12 删 routing+telephony+video），只留 packages 与 luci。
+  收益不在固件体积，而在 `feeds update/install` 时间、.config 符号噪声、
+  以及 CI 稳定性（不会再有 feed 静默 clone 失败）。
+
+■ 2. 6.6 删 luci-compat 链（-21 包的传递闭包）
+  证据：rootfs 里**没有任何** .lua controller/view（`usr/lib/lua/luci/controller`
+  不存在，`view/*.lua` 为 0）；所有界面都是 ucode/JS（/www/cgi-bin/luci 是
+  `#!/usr/bin/env ucode`，view/ 下是 firewall/upnp/eqos/package-manager/turboacc
+  的 .js）。唯一 `require("luci.*")` 出现在 l1dat_parser.lua 的两行注释里。
+  删：luci-compat / luci-lua-runtime / luci-lib-base / luci-lib-ip / luci-lib-ipkg /
+  luci-lib-jsonc / liblucihttp-lua。
+  注意保留：luci-lib-nixio 与 lua、lua-cjson 必须留——mtwifi_cfg（`#!/usr/bin/lua`）
+  与 l1dat_parser.lua（`require("nixio")`）在用。上游 mtwifi-cfg 的 DEPENDS
+  漏声明了这三个（+lua / +luci-lib-nixio 本次补上，否则一旦有人动 luci 组合包，
+  WiFi 会静默起不来）。
+  关键修复：上游 include/target.mk 的 DEFAULT_PACKAGES.tweak 列了
+  luci-compat / luci-lib-base / luci-lib-ipkg，只要跑一次 `make defconfig`
+  就会把它们拉回 .config。已从 target.mk 与种子中一并移除。
+  A/B 对照（qemu chroot，同一 rootfs 装回整套 lua 框架 vs 不装）：
+  登录页输出逐字节相同 → 证明这些包对当前界面零贡献。
+
+■ 3. 两树删 eqos 限速
+  证据：6.6 的 eqos 本来就是坏的——init 脚本调 iptables / ip6tables /
+  ebtables，而 rootfs 里只有 nft 与 ebtables-legacy，**没有任何 iptables
+  用户态程序**（manifest 里躺着 kmod-ipt-core/kmod-ipt-nat 两个内核模块骗人）。
+  开了 eqos 就是一堆 command not found，IPv6 限速路径全废。
+  即便不看这个 bug，其依赖链本身也过大：wget-ssl（死依赖，LUCI_DEPENDS 里声明，
+  全树脚本无一处调用）+ libpcre2 + zlib + ebtables 三件套 + tc-tiny +
+  kmod-sched-core + kmod-ifb + kmod-ebtables。
+  改动：两树都不选 luci-app-eqos-mtk 及其 i18n（6.12 的 eqos 是重写过的 nft 版，
+  可用，但为两树一致与体积一并移除；如需恢复 6.12 只需勾回一个包）。
+
+■ 4. 主题统一为 bootstrap（6.6 删 argon，-373KB 压缩）
+  证据：6.6 树 luci-theme-argon 的 uci-defaults（30_luci-theme-argon）在
+  30_luci-theme-bootstrap **之前**执行并把 mediaurlbase 改成 argon →
+  6.6 实际默认主题是 argon，而 6.12 是 bootstrap（两树 UI 不一致）。
+  体积实测（zstd -19）：argon 373KB（含 bg1.jpg 等大图）vs bootstrap 13KB。
+  改动：6.6 删 luci-theme-argon，两树统一 bootstrap。
+
+■ 5. 6.6 死依赖清理
+  - luci-app-turboacc-mtk 的 LUCI_DEPENDS 声明了 kmod-inet-diag +
+    kmod-netlink-diag，但它的 init 只操作 HNAT debugfs 与 sysctl，不装 ss/iproute2，
+    两个 kmod 无运行期消费者（6.12 同一 app 也声明了同样的依赖，却没有对应包）。
+    已从 Makefile 摘除。
+  - 6.6 删 kmod-nf-nathelper-extra（h323/pptp/amanda/sane/irc ALG，
+    压缩 ~32KB），与 6.12 对齐；连带 kmod-lib-textsearch、kmod-asn1-decoder 退出。
+    必须保留 kmod-nf-nathelper（ftp）与编译契约的 kmod-ipt-core/ipt-nat/nf-nat
+    （见上文「vendor 内核编译契约」，那是内核编译期硬需求，不是运行期依赖）。
+
+■ 6. 结论：不做的项（附证据）
+  6.12 的 libstdcpp6（压缩 513KB，原判为最大干净目标）——**订正放弃**。
+  此前判断「l1util 只被 09-fix-mtwifi-mac 用于写 MAC，摘它只需改一个 hotplug」
+  是错的。readelf 实证：libiwinfo.so.20230701 自身就有硬 DT_NEEDED →
+  libl1parser.so（iwinfo 的 C 源 iwinfo_mtk_l1util.c 调用
+  l1_get_chip_id_by_ifname / l1_get_chip_id_by_devname）；且 l1parser 是 netifd 的
+  WiFi 上报路径（lib/wifi/mtwifi.uc 与 lib/netifd/wireless/mtwifi.sh 都
+  `l1parser.open()`）。摘它 = fork vendored iwinfo C 模块 + 在 ucode 里重实现
+  L1 profile 解析，风险（WiFi 起不来）远大于 513KB 收益，不做。
+  另：wpad-openssl 730KB、openssl core 1.97MB 均为深依赖（apk/opkg https 源、
+  libustream-openssl、libopenssl-legacy←wpad），换 mbedtls 需重做整个 TLS 面，不值。
+
+■ 验证（本轮新增手段：把真 rootfs 跑起来）
+  qemu-user-static + chroot 执行产物里的 /www/cgi-bin/luci（ucode 实现）：
+    未改动的 rootfs：LuCI 正常 dispatch 并返回它自己的 500 页（chroot 内无
+      ubusd/rpcd，登录模板取 uci/ubus 数据必然失败）——证明分发链路是活的；
+    仅 stub 掉 3 个必须依赖常驻 daemon 的调用（system.board / uci.get /
+    session rollback）后：返回 403 + **完整渲染出登录表单**
+    （luci_username / luci_password / Log in / cascade.css 齐备）→ 证明删掉
+    lua 框架后界面功能无损。
+  Lua 侧一并实测：`lua -e 'require'` 逐个加载 cjson / nixio / datconf / inspect
+    → 全部 OK，mtwifi_cfg 的运行时依赖完整。
+
+实测（均为**干净克隆**流程：distclean 后构建，无 .config/feeds/staging_dir）：
+  6.6  12,933,916 字节  sha256 b3cffb37…  161 包（上轮 186，再 -25）
+  6.12 15,458,568 字节  sha256 84cd39bf…  159 包（含新增 UPnP 栈）
+两树构建均 exit 0。
+
+■ 构建期踩坑（供后续排查）
+  首次尝试两树并行 `just build66` + `just build612`（各 -j7，14 核机器）时，
+  6.6 的 toolchain/gdb 在 libiberty 编译 regex.c 时失败：
+  `./config.h:580: #define pid_t int` → regex.c 里 `typedef int pid_t` →
+  "two or more data types in declaration specifiers"。
+  根因是 configure 探针在宿主竞争下超时/失败，把 ac_cv_type_pid_t 判成 no
+  （6.12 同样步骤串行跑出来的是 ac_cv_type_pid_t=yes）。
+  不是配置问题：单独重跑 `toolchain/gdb/compile` 立即成功。
+  结论：本机 14 核不要同时跑两树的 world，串行即可（两条线各自都是全量重编译）。

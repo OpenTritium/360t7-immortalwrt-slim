@@ -2,8 +2,10 @@ name: feeds-update
 
 # 自动更新内置包（feeds）。
 #
-# 内置包不随固件源码走，而取自 feeds：packages / luci / routing / telephony / video。
-# 这些源的 LTS / AP 分支仍在持续提交，因此需要定期跟进。
+# 内置包不随固件源码走，而取自 feeds。本仓库只保留 packages 与 luci 两条：
+# routing / telephony / video 对本目标零贡献（第十四轮以包数据库 origin 统计确认，
+# 见 mt798x-*/README-slim.txt），删掉可省 clone 时间并避免 feed 静默拉取失败。
+# 这两条源的 LTS / AP 分支仍在持续提交，因此需要定期跟进。
 #
 # 机制：把 feeds.conf.default 里每个 ^sha 推进到该分支当前 HEAD，构建验证，
 # 绿色后由 auto-merge.yml 合并（本仓库选择「绿色自动合并」）。

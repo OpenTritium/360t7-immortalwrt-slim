@@ -2,7 +2,7 @@
 
 > 给 Qihoo 360T7M（MT7981B）的深度定制固件：把社区原版砍掉三分之一，
 > 在供应商内核上跑通主线级 BBRv3 与全链路硬件卸载，编译参数逐包分层——
-> 八轮优化，每一项都有构建日志和产物哈希背书。
+> 十四轮优化，每一项都有构建日志和产物哈希背书。
 
 双内核线并行维护：
 
@@ -10,14 +10,14 @@
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
 | 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
-| 产物 |  186 包 / 14.14MB / sha256 `41915e1c…` |  164 包 / 15.72MB / sha256 `dd7152d9…` |
+| 产物 |  161 包 / 12.93MB / sha256 `b3cffb37…` |  159 包 / 15.46MB / sha256 `84cd39bf…` |
 
 ## 成绩单（相对社区原版 full 固件）
 
 | 项 | 原 full 版 | 本项目 | 怎么做到的 |
 |---|---|---|---|
-| 固件体积 | 17.2MB | **14.16MB / 15.75MB** | 九轮裁剪 + zstd-19 squashfs |
-| 软件包数 | 306 | **186 / 164** | USB/存储/代理/DDNS 全栈清退，每个幸存包反查过依赖 |
+| 固件体积 | 17.2MB | **12.93MB / 15.46MB** | 十四轮裁剪 + zstd-19 squashfs |
+| 软件包数 | 306 | **161 / 159** | USB/存储/代理/DDNS/打印/限速全栈清退，每个幸存包反查过依赖 |
 | 拥塞控制 | BBRv1 | **BBRv3 + fq pacing** | CachyOS 官方回移植（6.6/6.12 两版），内建默认 |
 | NAT 转发 | 软转发 | **硬件卸载** | vendor HNAT（有线）+ WHNAT/WARP（无线）+ fullcone |
 | 编译参数 | 全树一刀切 | **逐包分层** | 热路径 -O2+LTO，冷路径 -Os，`-mcpu=cortex-a53`，全二进制 sstrip |
@@ -92,6 +92,7 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 
 - `REVISION` 来自树内 `revision` 文件（入库），不再依赖未入库的 `archive/`
 - feeds 在 `feeds.conf.default` 里用 `^sha` 固定；`feeds/` 不入库，首次构建自动按固定 sha 拉取
+  （只保留 `packages` 与 `luci` 两条——`routing`/`telephony`/`video` 对本目标 0 贡献，见第十四轮）
 - 因此同一提交在任意机器上重建，产物 sha256 一致
 
 > ⚠️ 上面的哈希来自**干净克隆**（无 `staging_dir`）。若在工作区增量构建，
@@ -169,7 +170,7 @@ just uboot-status   # 查看固定 commit 与本地状态
 
 ## 文档
 
-- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 九轮优化全过程：裁剪清单、BBRv3 移植、
+- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 十四轮优化全过程：裁剪清单、BBRv3 移植、
   KERNEL_ 通道清扫、分层参数、BBR 覆盖 bug 修复、fq pacing 补装
 - [`mt798x-6.12/README-slim.txt`](mt798x-6.12/README-slim.txt) — 新线移植记录（PRECAL/netif_rx 补丁、
   mtkhnat 契约差异）、UPnP 栈补齐与同步的对齐策略

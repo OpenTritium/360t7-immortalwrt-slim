@@ -29,11 +29,15 @@ build tree *args="world":
             # （现象：后续 package/install 报 cannot find dependency luci）。
             # 上游的守卫是「新克隆没有 .config 就直接返回」，所以这里
             # 不能事先放 .config —— 种子文件放在 defconfig/ 下，feeds 就绪后再注入。
+            #
+            # 每次构建都用种子覆盖 .config：种子是唯一事实来源，.config 是派生物。
+            # 否则改完种子在本机重建会沿用旧 .config，产物哈希与 CI（干净克隆、
+            # 无 .config）不一致 —— 而「清洁克隆可复现」是本仓库的核心不变量。
             if [ ! -d feeds/luci ]; then
                 ./scripts/feeds update -a
                 ./scripts/feeds install -a
             fi
-            [ -f .config ] || cp defconfig/360t7-slim.config .config
+            cp defconfig/360t7-slim.config .config
             exec make -j'"{{jobs}}"' REVISION="'"$rev"'" {{args}}
         '
 
@@ -87,9 +91,9 @@ pick612 format="sysupgrade":
 clean tree:
     docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs
 
-[doc("彻底清理指定树：连 staging_dir（工具链）一起删。用于复现干净克隆 / CI 的产物哈希")]
+[doc("彻底清理指定树：连 staging_dir（工具链）与派生的 .config 一起删。用于复现干净克隆 / CI 的产物哈希")]
 distclean tree:
-    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs staging_dir
+    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs staging_dir .config .config.old
 
 [doc("彻底清理 6.6")]
 distclean66:
