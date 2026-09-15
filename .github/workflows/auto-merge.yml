@@ -1,0 +1,45 @@
+name: auto-merge
+
+# 绿色自动合并：build workflow 在某个 PR 上跑成功后，若该 PR 带 automerge 标签，
+# 就 squash 合并。
+#
+# 这样安排而不是在 feeds-update 里直接 merge，是因为 GitHub 的 GITHUB_TOKEN
+# 触发的 workflow_run 不会递归触发新的 workflow；若在开 PR 的同一步就 merge，
+# 会跳过构建门禁。先等 build 成功再合，门禁才有效。
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 合并带 automerge 标签且构建通过的 PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 找出该次 build 关联的 PR（pull_request 触发时 head_branch 即 PR 分支）
+          head="${{ github.event.workflow_run.head_branch }}"
+          [ -n "$head" ] || { echo "非 PR 触发，跳过"; exit 0; }
+
+          pr="$(gh pr list --repo "$REPO" --head "$head" --state open \
+                  --json number,labels --jq '.[] | select(.labels[].name=="automerge") | .number' | head -1)"
+          [ -n "$pr" ] || { echo "分支 $head 无 automerge PR，跳过"; exit 0; }
+
+          # 再确认一次：该 PR 的最新 commit 就是本次构建的 commit
+          sha="${{ github.event.workflow_run.head_sha }}"
+          cur="$(gh pr view "$pr" --repo "$REPO" --json headRefOid --jq .headRefOid)"
+          [ "$sha" = "$cur" ] || { echo "PR 已有更新提交，等下一轮构建"; exit 0; }
+
+          echo "合并 PR #$pr（$head @ ${sha:0:8}）"
+          gh pr merge "$pr" --repo "$REPO" --squash --delete-branch

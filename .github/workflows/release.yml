@@ -1,0 +1,165 @@
+name: release
+
+# 自动 release。
+#
+# 触发：打 tag（v*）或手动。产物：两条线的 sysupgrade / initramfs（4 个镜像）
+# + manifest + config.buildinfo + feeds.buildinfo + SHA256SUMS。
+#
+# 额外做一次「可复现性核对」：因为两树已达成位级确定性构建
+# （见 mt798x-*/README-slim.txt 第十一轮补记），同一 REVISION 重建必须得到
+# 相同 sha256。若不一致说明构建环境里混进了变量，release 会失败——
+# 这是把「确定性」当成发布质量门用。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 发布标签（如 v1.0.0）
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      trees: ${{ steps.t.outputs.trees }}
+    steps:
+      - id: t
+        run: |
+          if [ '${{ github.event_name }}' = 'push' ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo 'trees=["mt798x-6.6","mt798x-6.12"]' >> "$GITHUB_OUTPUT"
+
+  # 先构建两次做位级比对，再产出对外发布的那份。
+  reproducible:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: ${{ fromJSON(needs.prepare.outputs.trees) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 腾出磁盘
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" /usr/local/swift
+          sudo apt-get clean
+
+      - name: 缓存 dl
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.tree }}/dl
+          key: dl-${{ matrix.tree }}-${{ hashFiles(format('{0}/feeds.conf.default', matrix.tree)) }}
+          restore-keys: dl-${{ matrix.tree }}-
+
+      - name: 构建构建器镜像
+        run: docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+
+      - name: 首次构建
+        run: |
+          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
+            bash -euo pipefail -c '
+              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
+              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
+            '
+
+      - name: 记录首次哈希
+        run: |
+          f=$(ls ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*)
+          sha256sum $f | tee /tmp/first.sha
+
+      - name: 清理产物后重建（确定性核对）
+        run: |
+          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
+            bash -euo pipefail -c '
+              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
+              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
+            '
+          f=$(ls ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*)
+          sha256sum -c /tmp/first.sha || {
+            echo "::error::${{ matrix.tree }} 重建哈希与首次不一致——构建不可复现，拒绝发布"
+            exit 1
+          }
+
+  release:
+    needs: [prepare, reproducible]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: ${{ fromJSON(needs.prepare.outputs.trees) }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: 腾出磁盘
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" /usr/local/swift
+          sudo apt-get clean
+      - uses: actions/cache@v6
+        with:
+          path: ${{ matrix.tree }}/dl
+          key: dl-${{ matrix.tree }}-${{ hashFiles(format('{0}/feeds.conf.default', matrix.tree)) }}
+          restore-keys: dl-${{ matrix.tree }}-
+      - run: docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+
+      - name: 全量构建
+        run: |
+          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
+            bash -euo pipefail -c '
+              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
+              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
+            '
+
+      - name: 收集产物
+        run: |
+          T='${{ matrix.tree }}'
+          D="$T/bin/targets/mediatek/filogic"
+          mkdir -p "rel/$T"
+          for pat in '*sysupgrade*' '*initramfs*' '*.manifest' 'config.buildinfo' 'feeds.buildinfo'; do
+            cp -v $D/$pat "rel/$T/" 2>/dev/null || true
+          done
+          ( cd "rel/$T" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS )
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.tree }}
+          path: rel/${{ matrix.tree }}/
+          if-no-files-found: error
+
+  publish:
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: all
+          merge-multiple: true
+
+      - name: 汇总校验和
+        run: |
+          cd all
+          find . -name SHA256SUMS -exec cat {} \; | sort -k2 > ALL-SHA256SUMS
+          cat ALL-SHA256SUMS
+
+      - name: 创建 Release
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          gh release create '${{ needs.prepare.outputs.tag }}' \
+            --repo '${{ github.repository }}' \
+            --title '${{ needs.prepare.outputs.tag }}' \
+            --generate-notes \
+            all/* || \
+          gh release upload '${{ needs.prepare.outputs.tag }}' \
+            --repo '${{ github.repository }}' all/* --clobber

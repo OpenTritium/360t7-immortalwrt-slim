@@ -1,0 +1,187 @@
+name: upstream-sync
+
+# 跟进两条线的上游：
+#   mt798x-6.6  -> padavanonly/immortalwrt-mt798x-6.6    (openwrt-24.10-6.6)
+#   mt798x-6.12 -> zheshifandian/immortalwrt-mt798x-6.12 (25.12)
+#
+# 原理：外层仓库的 mt798x-* 目录是「上游全树 + 我们的改动」的快照，
+# base-upstream 记录所基于的上游提交。同步时在临时 git 仓库里
+# 以「上游@旧基线」为底、把我们的树状态提交上去（= 我们的补丁），
+# 再 rebase 到新上游 —— 真正的合并，冲突由 git 明确报出。
+#
+# 触发：每日定时 + 手动。
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tree:
+        type: choice
+        options: [mt798x-6.6, mt798x-6.12, both]
+        default: both
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      trees: ${{ steps.set.outputs.trees }}
+    steps:
+      - id: set
+        run: |
+          case "${{ github.event.inputs.tree || 'both' }}" in
+            both) echo 'trees=["mt798x-6.6","mt798x-6.12"]' >> "$GITHUB_OUTPUT" ;;
+            *)    echo "trees=[\"${{ github.event.inputs.tree }}\"]" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  sync:
+    needs: matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tree: mt798x-6.6
+            upstream: https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
+            branch: openwrt-24.10-6.6
+          - tree: mt798x-6.12
+            upstream: https://github.com/zheshifandian/immortalwrt-mt798x-6.12
+            branch: '25.12'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 跳过未选中的树
+        id: pick
+        run: |
+          want='${{ needs.matrix.outputs.trees }}'
+          case "$want" in *"${{ matrix.tree }}"*) echo "go=true"  >> "$GITHUB_OUTPUT" ;;
+                         *)                    echo "go=false" >> "$GITHUB_OUTPUT" ;; esac
+
+      - name: 读基线并探测上游
+        if: steps.pick.outputs.go == 'true'
+        id: probe
+        run: |
+          f="${{ matrix.tree }}/base-upstream"
+          [ -f "$f" ] || { echo "缺少 $f（记录所基于的上游提交，入库）"; exit 1; }
+          old="$(tr -d '[:space:]' < "$f")"
+          new="$(git ls-remote '${{ matrix.upstream }}' 'refs/heads/${{ matrix.branch }}' | cut -f1)"
+          [ -n "$new" ] || { echo "读不到上游 ${{ matrix.upstream }}"; exit 1; }
+          echo "旧基线 $old"; echo "上游头 $new"
+          {
+            echo "old=$old"
+            echo "new=$new"
+            if [ "$old" != "$new" ]; then echo "changed=true"; else echo "changed=false"; fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 无变化则跳过
+        if: steps.pick.outputs.go == 'true' && steps.probe.outputs.changed != 'true'
+        run: echo '${{ matrix.tree }}：上游仍在 ${{ steps.probe.outputs.old }}，无变化'
+
+      # 临时仓库里做真 rebase：
+      #   upstream@old -> 提交我们的树状态（= 我们的补丁） -> rebase 到 upstream@new
+      - name: 合并新上游
+        if: steps.pick.outputs.go == 'true' && steps.probe.outputs.changed == 'true'
+        id: merge
+        run: |
+          set -euo pipefail
+          T='${{ matrix.tree }}'
+          OLD='${{ steps.probe.outputs.old }}'
+          NEW='${{ steps.probe.outputs.new }}'
+          git config --global user.name  'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          rm -rf /tmp/sync && mkdir -p /tmp/sync && cd /tmp/sync
+          git init -q .
+          git remote add up '${{ matrix.upstream }}'
+
+          git fetch -q --depth 1 up "$OLD"
+          git checkout -q FETCH_HEAD
+
+          rsync -a --delete \
+            --exclude='.git' --exclude='build_dir/' --exclude='staging_dir/' \
+            --exclude='tmp/' --exclude='bin/' --exclude='dl/' --exclude='feeds/' \
+            "$GITHUB_WORKSPACE/$T/" ./
+          git add -A
+          if git diff --cached --quiet; then
+            echo "我们的树与上游旧基线无差异（异常）"
+            echo "status=empty" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -qm "slim: 我们的改动（相对上游 $OLD）"
+
+          git fetch -q up "$NEW"
+          if git rebase FETCH_HEAD; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            git rebase --abort || true
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 冲突则开 issue
+        if: steps.merge.outputs.status == 'conflict'
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          cat > /tmp/body.md <<'BODY'
+          上游有新提交，但我们相对旧基线的改动无法自动 rebase 过去。
+
+          这通常意味着上游改了我们也动过的同一处（内核 bump 跟随、HNAT 契约、
+          驱动差异等），**必须人工重放适配**。
+
+          本地重放：
+
+          ```sh
+          git clone UPSTREAM /tmp/up && cd /tmp/up
+          git checkout NEW
+          # 参照本仓库 TREE/ 的内容手工套用我们的改动
+          ```
+          BODY
+          sed -i "s#UPSTREAM#${{ matrix.upstream }}#; s#NEW#${{ steps.probe.outputs.new }}#; s#TREE#${{ matrix.tree }}#" /tmp/body.md
+          gh issue create --title "上游跟进冲突（${{ matrix.tree }}）" --body-file /tmp/body.md || true
+
+      - name: 生成 PR 分支
+        if: steps.merge.outputs.status == 'ok'
+        run: |
+          set -euo pipefail
+          T='${{ matrix.tree }}'
+          br="upstream-sync/$T-$(date -u +%Y%m%d)"
+          echo "br=$br" >> "$GITHUB_ENV"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -q -b "$br"
+          rsync -a --delete \
+            --exclude='.git' --exclude='build_dir/' --exclude='staging_dir/' \
+            --exclude='tmp/' --exclude='bin/' --exclude='dl/' --exclude='feeds/' \
+            /tmp/sync/ "$T/"
+          echo '${{ steps.probe.outputs.new }}' > "$T/base-upstream"
+          git add -A
+          git commit -qm "上游跟进（$T）：rebase 到 ${{ steps.probe.outputs.new }}"
+          git push -u origin "$br"
+
+      - name: 开 PR
+        if: steps.merge.outputs.status == 'ok'
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          cat > /tmp/pr.md <<'BODY'
+          upstream-sync 自动生成，已把我们的改动 rebase 到新上游。
+
+          | | |
+          |---|---|
+          | 树 | `TREE` |
+          | 上游 | `UPSTREAM` (`BRANCH`) |
+          | 旧基线 | `OLD` |
+          | 新基线 | `NEW` |
+
+          ⚠️ **构建绿 ≠ 行为正确**。上游 bump 内核小版本或驱动时，编译通过但无线/
+          硬件卸载行为可能变化。合入前请核对 `mt798x-*/README-slim.txt` 里的
+          内核跟随策略与 vendor 契约说明。
+          BODY
+          sed -i "s#TREE#${{ matrix.tree }}#; s#UPSTREAM#${{ matrix.upstream }}#; s#BRANCH#${{ matrix.branch }}#; s#OLD#${{ steps.probe.outputs.old }}#; s#NEW#${{ steps.probe.outputs.new }}#" /tmp/pr.md
+          gh pr create \
+            --title "上游跟进（${{ matrix.tree }}）：$(echo ${{ steps.probe.outputs.new }} | cut -c1-8)" \
+            --body-file /tmp/pr.md \
+            --base main --head "${{ env.br }}" || true

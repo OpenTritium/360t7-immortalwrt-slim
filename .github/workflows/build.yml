@@ -1,0 +1,104 @@
+name: build
+
+# 新克隆（干净 runner）能否构建，是本仓库的核心不变量。
+# 这条 workflow 也是另外两条自动化的构建门禁：
+#   - upstream-sync：合并上游后必须仍能构建
+#   - feeds-update：feed 升级后必须仍能构建
+# GitHub 托管 runner 为 4 vCPU，全量构建约 2–4 小时，但要先腾出磁盘。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tree:
+        description: 构建哪条线
+        type: choice
+        options: [mt798x-6.6, mt798x-6.12, both]
+        default: both
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      trees: ${{ steps.set.outputs.trees }}
+    steps:
+      - id: set
+        run: |
+          case "${{ github.event.inputs.tree || 'both' }}" in
+            both) echo 'trees=["mt798x-6.6","mt798x-6.12"]' >> "$GITHUB_OUTPUT" ;;
+            *)    echo "trees=[\"${{ github.event.inputs.tree }}\"]" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    needs: matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: ${{ fromJSON(needs.matrix.outputs.trees) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # GitHub 托管 runner 根分区约 14GB 可用，OpenWrt 全量构建不够用。
+      # 删掉预装的大块头（Android SDK / .NET / Haskell / Swift 等），
+      # 可腾出 ~25GB；不删工具链缓存等其他 job 就会磁盘写满。
+      - name: 腾出磁盘
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" /usr/local/swift
+          sudo apt-get clean
+          df -h /
+
+      # dl 缓存 2GB（两树合起来），没有它每次都要重下内核 tarball（141MB×2 等）。
+      # key 里带树名，两条线互不覆盖。
+      - name: 缓存 dl
+        uses: actions/cache@v6
+        with:
+          path: ${{ matrix.tree }}/dl
+          key: dl-${{ matrix.tree }}-${{ hashFiles(format('{0}/feeds.conf.default', matrix.tree)) }}
+          restore-keys: dl-${{ matrix.tree }}-
+
+      - name: 构建构建器镜像
+        run: |
+          docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+          docker images 360t7m-builder
+
+      # 直接调 just，保证 CI 与本地走同一条路径（含 feeds 按 ^sha 拉取、
+      # REVISION 读自树内 revision 文件），避免两套逻辑漂移。
+      - name: 全量构建 ${{ matrix.tree }}
+        run: |
+          docker run --rm \
+            -v "$PWD/${{ matrix.tree }}:/build" -w /build \
+            360t7m-builder \
+            bash -euo pipefail -c '
+              if [ ! -d feeds/luci ]; then
+                ./scripts/feeds update -a
+                ./scripts/feeds install -a
+              fi
+              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
+            '
+
+      - name: 取产物与校验和
+        run: |
+          mkdir -p staging
+          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*       staging/ 2>/dev/null || true
+          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*initramfs*        staging/ 2>/dev/null || true
+          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*.manifest         staging/ 2>/dev/null || true
+          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/config.buildinfo   staging/ 2>/dev/null || true
+          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/feeds.buildinfo    staging/ 2>/dev/null || true
+          ( cd staging && sha256sum -- * > SHA256SUMS && cat SHA256SUMS )
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.tree }}
+          path: staging/
+          if-no-files-found: error
+          retention-days: 14

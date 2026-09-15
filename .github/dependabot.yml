@@ -1,0 +1,23 @@
+# 让 action 版本自动跟上，避免再次落后若干大版本。
+#
+# 背景：本仓库的 workflow 初次落地时把 action 锁在了 v4，而当时实际已是
+# checkout v7 / cache v6 / upload-artifact v7 / download-artifact v8 ——
+# 差了 3~5 个大版本。这类滞后不会报错，只会悄悄积累（旧 major 仍会收到
+# 安全回补，所以更难察觉）。交给 Dependabot 每周看一眼。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - automerge
+
+  # 构建器镜像的基础镜像（FROM ubuntu:24.04）**故意不自动升级**：
+  # 它是为了复现原始构建环境而逐包还原的，换基础镜像会改变 glibc/gcc 版本，
+  # 破坏「确定性重建」与既有的 dpkg 集合比对结论。要升需人工评估后改。

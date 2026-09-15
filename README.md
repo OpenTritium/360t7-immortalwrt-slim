@@ -88,7 +88,32 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 ```
 
 构建在 rootless docker 容器内进行（镜像 v3，dpkg 集合与原镜像逐一比对一致），
-任意机器克隆即建，无隐藏本地依赖。
+新克隆即可构建，不依赖本机残留：
+
+- `REVISION` 来自树内 `revision` 文件（入库），不再依赖未入库的 `archive/`
+- feeds 在 `feeds.conf.default` 里用 `^sha` 固定；`feeds/` 不入库，首次构建自动按固定 sha 拉取
+- 因此同一提交在任意机器上重建，产物 sha256 一致（两树均已验证位级可复现）
+
+## 自动化
+
+四条 workflow，均可用 `workflow_dispatch` 手动触发：
+
+| workflow | 触发 | 作用 |
+|---|---|---|
+| `build` | push/PR | 干净 runner 上全量构建两树，产出 artifact + SHA256SUMS。**这是下面几条的门禁** |
+| `upstream-sync` | 每日 | 探测上游（padavanonly / zheshifandian），把我们的改动 rebase 到新上游，开 PR；冲突则开 issue |
+| `feeds-update` | 每周一 | 把 feeds 的 `^sha` 推进到分支 HEAD，构建验证后开 PR |
+| `release` | tag `v*` / 手动 | 两树全量构建 → **重建比对哈希**（不可复现则拒绝发布） → GitHub Release |
+
+`auto-merge` 监听 `build` 成功，将带 `automerge` 标签的 PR（feeds-update / Dependabot）squash 合并。
+`upstream-sync` 的 PR **不打该标签**：上游 bump 内核或驱动时编译通过但行为可能变化，需人工核对
+`mt798x-*/README-slim.txt` 里的内核跟随策略与 vendor 契约。
+
+> 关于版本：workflow 里的 action 锁在当时的当前大版本
+> （checkout v7 / cache v6 / upload-artifact v7 / download-artifact v8），
+> 由 `dependabot.yml` 每周跟。runner 用 `ubuntu-24.04`（26.04 在 runner-images 里
+> 仍是 public preview）；构建器基础镜像固定在 `ubuntu:24.04` 且**故意不自动升级**——
+> 它承担复现原始构建环境的职责，换基础镜像会改变 glibc/gcc 从而破坏可复现性。
 
 ## 文档
 

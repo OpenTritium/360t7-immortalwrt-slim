@@ -1,0 +1,130 @@
+name: feeds-update
+
+# 自动更新内置包（feeds）。
+#
+# 内置包不随固件源码走，而取自 feeds：packages / luci / routing / telephony / video。
+# 这些源的 LTS / AP 分支仍在持续提交，因此需要定期跟进。
+#
+# 机制：把 feeds.conf.default 里每个 ^sha 推进到该分支当前 HEAD，构建验证，
+# 绿色后由 auto-merge.yml 合并（本仓库选择「绿色自动合并」）。
+#
+# ⚠️ 为什么必须过构建门禁：feed 里的包与我们的裁剪清单直接相关
+#    （dnsmasq 的 DNSSEC 选项、miniupnpd 变体、odhcpd 版本、Luci 主题等），
+#    上游改依赖或改构建选项会让裁剪后的配置编译失败或静默变胖。
+
+on:
+  schedule:
+    - cron: '40 4 * * 1'      # 每周一
+  workflow_dispatch:
+    inputs:
+      tree:
+        type: choice
+        options: [mt798x-6.6, mt798x-6.12, both]
+        default: both
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      trees: ${{ steps.set.outputs.trees }}
+    steps:
+      - id: set
+        run: |
+          case "${{ github.event.inputs.tree || 'both' }}" in
+            both) echo 'trees=["mt798x-6.6","mt798x-6.12"]' >> "$GITHUB_OUTPUT" ;;
+            *)    echo "trees=[\"${{ github.event.inputs.tree }}\"]" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  bump:
+    needs: matrix
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: ${{ fromJSON(needs.matrix.outputs.trees) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 推进 pin 到分支 HEAD
+        id: scan
+        run: |
+          set -euo pipefail
+          f='${{ matrix.tree }}/feeds.conf.default'
+          hint='openwrt-24.10'
+          [ '${{ matrix.tree }}' = 'mt798x-6.12' ] && hint='openwrt-25.12'
+          echo "feed 分支提示: $hint"
+
+          tmp="$(mktemp)"
+          changed=false
+          while IFS= read -r line; do
+            case "$line" in
+              src-git*'^'*)
+                kind="$(echo "$line" | awk '{print $1}')"
+                name="$(echo "$line" | awk '{print $2}')"
+                repo="$(echo "$line" | awk '{print $3}')"; repo="${repo%%^*}"
+                cur="${line##*^}"
+                head="$(git ls-remote "$repo" "refs/heads/$hint" | cut -f1)"
+                if [ -z "$head" ]; then
+                  echo "  警告：读不到 $repo $hint，保持原值"
+                  printf '%s\n' "$line" >> "$tmp"; continue
+                fi
+                if [ "$head" != "$cur" ]; then
+                  echo "  $name: ${cur:0:8} -> ${head:0:8}"
+                  changed=true
+                else
+                  echo "  $name: 已最新 (${cur:0:8})"
+                fi
+                printf '%s %s %s^%s\n' "$kind" "$name" "$repo" "$head" >> "$tmp"
+                ;;
+              *) printf '%s\n' "$line" >> "$tmp" ;;
+            esac
+          done < "$f"
+          mv "$tmp" "$f"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: 无变化则跳过
+        if: steps.scan.outputs.changed != 'true'
+        run: echo '${{ matrix.tree }}：feeds 均已在分支 HEAD'
+
+      - name: 建分支提交
+        if: steps.scan.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          br="feeds-update/${{ matrix.tree }}-$(date -u +%Y%m%d)"
+          echo "br=$br" >> "$GITHUB_ENV"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -q -b "$br"
+          git add '${{ matrix.tree }}/feeds.conf.default'
+          git diff --cached --stat
+          git commit -qm "feeds 跟进（${{ matrix.tree }}）：$(date -u +%F) pin 推进到分支 HEAD"
+          git push -u origin "$br"
+
+      - name: 开 PR 并打自动合并标签
+        if: steps.scan.outputs.changed == 'true'
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          cat > /tmp/pr.md <<'BODY'
+          feeds-update 自动生成。
+
+          | | |
+          |---|---|
+          | 树 | `TREE` |
+          | 变更 | `feeds.conf.default` 各 `^sha` |
+          | 验证 | 本 PR 上的 build workflow |
+
+          上游包更新可能改动依赖或构建选项，影响裁剪清单
+          （dnsmasq 的 DNSSEC、miniupnpd 变体、odhcpd 版本、Luci 主题等）。
+          构建通过后按仓库设置自动合并；若包数或体积有变化，请对照
+          `mt798x-*/README-slim.txt` 的清单说明。
+          BODY
+          sed -i "s#TREE#${{ matrix.tree }}#" /tmp/pr.md
+          gh pr create \
+            --title "feeds 跟进（${{ matrix.tree }}）：$(date -u +%F)" \
+            --body-file /tmp/pr.md \
+            --base main --head "${{ env.br }}" || true
+          gh pr edit "${{ env.br }}" --add-label automerge || true
