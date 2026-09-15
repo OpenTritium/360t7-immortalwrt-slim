@@ -11,18 +11,24 @@ root := justfile_directory()
 default:
     @just --list
 
-[doc("在指定树执行 make 目标（默认 world 全量构建；REVISION 钉自 archive 留底 git，版本号确定性）")]
+[doc("在指定树执行 make 目标（默认 world 全量构建；REVISION 读自树内 revision 文件，feeds 按 feeds.conf.default 的 ^sha 固定）")]
 build tree *args="world":
     #!/usr/bin/env bash
     set -euo pipefail
-    rev=""
-    case "{{tree}}" in
-        mt798x-6.6)  gd="{{root}}/archive/mt798x-6.6.git" ;;
-        mt798x-6.12) gd="{{root}}/archive/mt798x-6.12.git" ;;
-        *) gd="" ;;
-    esac
-    [ -z "$gd" ] || rev=$(git --git-dir="$gd" rev-parse --short=8 HEAD)
-    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} make -j{{jobs}} ${rev:+REVISION=$rev} {{args}}
+    revfile="{{root}}/{{tree}}/revision"
+    [ -f "$revfile" ] || { echo "缺少 $revfile（该文件入库，勿删）" >&2; exit 1; }
+    rev="$(tr -d '[:space:]' < "$revfile")"
+    [ -n "$rev" ] || { echo "$revfile 为空" >&2; exit 1; }
+    # feeds/ 不入库；新克隆（含 CI）首次构建时按 feeds.conf.default 里固定的
+    # ^sha 拉取，之后不再变动（feeds 脚本对带 sha 的源不做 update）。
+    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} \
+        bash -euo pipefail -c '
+            if [ ! -d feeds/luci ]; then
+                ./scripts/feeds update -a
+                ./scripts/feeds install -a
+            fi
+            exec make -j'"{{jobs}}"' REVISION="'"$rev"'" {{args}}
+        '
 
 [doc("6.6 稳定基线：全量构建（默认）")]
 build66 *args="world":
