@@ -5,6 +5,12 @@ name: build
 #   - upstream-sync：合并上游后必须仍能构建
 #   - feeds-update：feed 升级后必须仍能构建
 # GitHub 托管 runner 为 4 vCPU，全量构建约 2–4 小时，但要先腾出磁盘。
+#
+# ⚠️ 这里**必须**通过 `just` 调用构建，不要在 YAML 里手写 docker run。
+#    曾经手写过一次，漏了「先 feeds、后注入 defconfig 种子」的顺序，
+#    导致 make 因缺 .config 落进 menuconfig、在无 TTY 的 runner 上
+#    报 "Error opening terminal: unknown" 而失败。
+#    justfile 是唯一事实来源。
 
 on:
   push:
@@ -43,12 +49,17 @@ jobs:
       fail-fast: false
       matrix:
         tree: ${{ fromJSON(needs.matrix.outputs.trees) }}
+        include:
+          - tree: mt798x-6.6
+            recipe: build66
+          - tree: mt798x-6.12
+            recipe: build612
     steps:
       - uses: actions/checkout@v7
 
       # GitHub 托管 runner 根分区约 14GB 可用，OpenWrt 全量构建不够用。
       # 删掉预装的大块头（Android SDK / .NET / Haskell / Swift 等），
-      # 可腾出 ~25GB；不删工具链缓存等其他 job 就会磁盘写满。
+      # 可腾出 ~25GB；不删工具链阶段就会磁盘写满。
       - name: 腾出磁盘
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -57,8 +68,11 @@ jobs:
           sudo apt-get clean
           df -h /
 
-      # dl 缓存 2GB（两树合起来），没有它每次都要重下内核 tarball（141MB×2 等）。
-      # key 里带树名，两条线互不覆盖。
+      - name: 安装 just
+        uses: extractions/setup-just@v4
+
+      # dl 缓存约 2GB/树，没有它每次都要重下内核 tarball（单棵树 140MB+）。
+      # key 里带树名与 feeds.conf.default 的哈希：feed pin 一变即失效重建。
       - name: 缓存 dl
         uses: actions/cache@v6
         with:
@@ -66,34 +80,20 @@ jobs:
           key: dl-${{ matrix.tree }}-${{ hashFiles(format('{0}/feeds.conf.default', matrix.tree)) }}
           restore-keys: dl-${{ matrix.tree }}-
 
+      # 用 justfile 里的镜像名构建，保证与 `just build*` 用的是同一个 tag。
       - name: 构建构建器镜像
-        run: |
-          docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
-          docker images 360t7m-builder
+        run: just builder
 
-      # 直接调 just，保证 CI 与本地走同一条路径（含 feeds 按 ^sha 拉取、
-      # REVISION 读自树内 revision 文件），避免两套逻辑漂移。
       - name: 全量构建 ${{ matrix.tree }}
-        run: |
-          docker run --rm \
-            -v "$PWD/${{ matrix.tree }}:/build" -w /build \
-            360t7m-builder \
-            bash -euo pipefail -c '
-              if [ ! -d feeds/luci ]; then
-                ./scripts/feeds update -a
-                ./scripts/feeds install -a
-              fi
-              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
-            '
+        run: just ${{ matrix.recipe }}
 
       - name: 取产物与校验和
         run: |
           mkdir -p staging
-          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*       staging/ 2>/dev/null || true
-          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*initramfs*        staging/ 2>/dev/null || true
-          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/*.manifest         staging/ 2>/dev/null || true
-          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/config.buildinfo   staging/ 2>/dev/null || true
-          cp -v ${{ matrix.tree }}/bin/targets/mediatek/filogic/feeds.buildinfo    staging/ 2>/dev/null || true
+          D=${{ matrix.tree }}/bin/targets/mediatek/filogic
+          for pat in '*sysupgrade*' '*initramfs*' '*.manifest' 'config.buildinfo' 'feeds.buildinfo'; do
+            cp -v $D/$pat staging/ 2>/dev/null || true
+          done
           ( cd staging && sha256sum -- * > SHA256SUMS && cat SHA256SUMS )
 
       - uses: actions/upload-artifact@v7

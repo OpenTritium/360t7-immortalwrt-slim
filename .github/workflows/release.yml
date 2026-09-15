@@ -5,10 +5,12 @@ name: release
 # 触发：打 tag（v*）或手动。产物：两条线的 sysupgrade / initramfs（4 个镜像）
 # + manifest + config.buildinfo + feeds.buildinfo + SHA256SUMS。
 #
-# 额外做一次「可复现性核对」：因为两树已达成位级确定性构建
-# （见 mt798x-*/README-slim.txt 第十一轮补记），同一 REVISION 重建必须得到
-# 相同 sha256。若不一致说明构建环境里混进了变量，release 会失败——
-# 这是把「确定性」当成发布质量门用。
+# 额外做一次「可复现性核对」：同一 REVISION 重建必须得到相同 sha256
+# （两树均已验证位级可复现，见 mt798x-*/README-slim.txt）。
+# 不一致说明构建环境混进了变量，release 失败 —— 把「确定性」当发布质量门用。
+#
+# ⚠️ 与 build.yml 同样：构建一律走 `just`，不在 YAML 里手写 docker run。
+#    先 feeds、后注入 defconfig 种子的顺序只在 justfile 里维护。
 
 on:
   push:
@@ -38,14 +40,19 @@ jobs:
           fi
           echo 'trees=["mt798x-6.6","mt798x-6.12"]' >> "$GITHUB_OUTPUT"
 
-  # 先构建两次做位级比对，再产出对外发布的那份。
+  # 先构建两次做位级比对，确认可复现后才进入正式出包。
+  # 两树各自独立（fail-fast: false），一棵失败不影响另一棵的结论。
   reproducible:
     needs: prepare
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        tree: ${{ fromJSON(needs.prepare.outputs.trees) }}
+        include:
+          - tree: mt798x-6.6
+            recipe: build66
+          - tree: mt798x-6.12
+            recipe: build612
     steps:
       - uses: actions/checkout@v7
 
@@ -55,6 +62,10 @@ jobs:
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
                       "$AGENT_TOOLSDIRECTORY" /usr/local/swift
           sudo apt-get clean
+          df -h /
+
+      - name: 安装 just
+        uses: extractions/setup-just@v4
 
       - name: 缓存 dl
         uses: actions/cache@v6
@@ -64,28 +75,23 @@ jobs:
           restore-keys: dl-${{ matrix.tree }}-
 
       - name: 构建构建器镜像
-        run: docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+        run: just builder
 
       - name: 首次构建
-        run: |
-          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
-            bash -euo pipefail -c '
-              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
-              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
-            '
+        run: just ${{ matrix.recipe }}
 
       - name: 记录首次哈希
         run: |
           f=$(ls ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*)
-          sha256sum $f | tee /tmp/first.sha
+          sha256sum "$f" | tee /tmp/first.sha
 
+      # 同一棵树、同一 REVISION 再建一次。幂等构建不会重编（make 判定无变化），
+      # 因此这一步真正检验的是「从零重建是否得到同一结果」——
+      # 故先删掉本次产物再重建。
       - name: 清理产物后重建（确定性核对）
         run: |
-          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
-            bash -euo pipefail -c '
-              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
-              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
-            '
+          just distclean ${{ matrix.tree }}
+          just ${{ matrix.recipe }}
           f=$(ls ${{ matrix.tree }}/bin/targets/mediatek/filogic/*sysupgrade*)
           sha256sum -c /tmp/first.sha || {
             echo "::error::${{ matrix.tree }} 重建哈希与首次不一致——构建不可复现，拒绝发布"
@@ -98,29 +104,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tree: ${{ fromJSON(needs.prepare.outputs.trees) }}
+        include:
+          - tree: mt798x-6.6
+            recipe: build66
+          - tree: mt798x-6.12
+            recipe: build612
     steps:
       - uses: actions/checkout@v7
+
       - name: 腾出磁盘
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
                       "$AGENT_TOOLSDIRECTORY" /usr/local/swift
           sudo apt-get clean
+
+      - name: 安装 just
+        uses: extractions/setup-just@v4
+
       - uses: actions/cache@v6
         with:
           path: ${{ matrix.tree }}/dl
           key: dl-${{ matrix.tree }}-${{ hashFiles(format('{0}/feeds.conf.default', matrix.tree)) }}
           restore-keys: dl-${{ matrix.tree }}-
-      - run: docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+
+      - name: 构建构建器镜像
+        run: just builder
 
       - name: 全量构建
-        run: |
-          docker run --rm -v "$PWD/${{ matrix.tree }}:/build" -w /build 360t7m-builder \
-            bash -euo pipefail -c '
-              [ -d feeds/luci ] || { ./scripts/feeds update -a && ./scripts/feeds install -a; }
-              exec make -j"$(nproc)" REVISION="$(tr -d "[:space:]" < revision)" world
-            '
+        run: just ${{ matrix.recipe }}
 
       - name: 收集产物
         run: |

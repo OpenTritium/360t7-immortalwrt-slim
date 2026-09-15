@@ -2,10 +2,15 @@ name: uboot
 
 # 构建（社区）U-Boot + ATF —— 设备实际运行的引导器，来源 hanwckf/bl-mt798x。
 #
-# 与 build.yml 的区别：那里建的是**固件**（含随固件打包的、作备份用的主线 U-Boot），
+# 与 build.yml 的区别：那里建的是**固件**（含随固件打包、作备份用的主线 U-Boot），
 # 这里建的是用于刷写设备的社区引导器。二者不是同一个东西，见 README「U-Boot」一节。
 #
-# 触发：手动；或 uboot-revision 变更时（follow-upstream 会改它）。
+# ⚠️ 构建一律走 `just uboot`（justfile 是唯一事实来源）：
+#    它负责按 uboot-revision 固定 commit、SOC/BOARD 参数，以及 ATF 需要的
+#    python 软链（ATF 的 makeconfig 找的是 python 而非 python3，缺它时
+#    defconfig 静默不生效、平台回落 fvp，最后报 fip build fail）。
+#
+# 触发：手动；或 uboot-revision / 构建器镜像变更时。
 
 on:
   workflow_dispatch:
@@ -24,37 +29,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: 读固定 commit
-        id: rev
-        run: |
-          rev="$(tr -d '[:space:]' < uboot-revision)"
-          [ -n "$rev" ] || { echo "uboot-revision 为空"; exit 1; }
-          echo "rev=$rev" >> "$GITHUB_OUTPUT"
-          echo "short=${rev:0:8}" >> "$GITHUB_OUTPUT"
+      - name: 安装 just
+        uses: extractions/setup-just@v4
 
       - name: 构建构建器镜像
-        run: docker build -t 360t7m-builder -f docker/Dockerfile.builder docker
+        run: just builder
 
-      # 与 justfile 的 uboot 配方保持一致：同一镜像、同一 python 软链、
-      # 同一 SOC/BOARD，避免 CI 与本地两套逻辑漂移。
-      - name: 检出并构建 U-Boot
-        run: |
-          set -euo pipefail
-          git clone --filter=blob:none https://github.com/hanwckf/bl-mt798x bl-mt798x
-          git -C bl-mt798x checkout "${{ steps.rev.outputs.rev }}"
-          docker run --rm -v "$PWD/bl-mt798x:/bl" -w /bl 360t7m-builder \
-            bash -euo pipefail -c '
-              command -v python >/dev/null 2>&1 ||
-                ln -sf "$(command -v python3)" /usr/local/bin/python
-              exec env SOC=mt7981 BOARD=360t7 ./build.sh
-            '
+      - name: 取源码并构建 U-Boot + ATF
+        run: just uboot
 
-      - name: 收集产物
+      - name: 补一份上游 commit 记录
         run: |
           mkdir -p staging
-          cp -v bl-mt798x/output/mt7981_360t7-* staging/
+          cp -v out/mt7981_360t7-* staging/
+          short="$(git -C bl-mt798x rev-parse --short=8 HEAD)"
+          echo "$short" > staging/UPSTREAM-COMMIT
           ( cd staging && sha256sum mt7981_360t7-* > SHA256SUMS && cat SHA256SUMS )
-          echo "${{ steps.rev.outputs.short }}" > staging/UPSTREAM-COMMIT
+          echo "bl-mt798x @ $short"
 
       - uses: actions/upload-artifact@v7
         with:
