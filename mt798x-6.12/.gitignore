@@ -2,10 +2,13 @@
 .DS_Store
 .*.swp
 /env
-/dl
+/dl/*
+# vendor 源码（无 PKG_SOURCE_URL，必须随仓库分发，否则新克隆构建失败）
+!/dl/datconf*
+!/dl/mt79*
+!/dl/warp*
 /.config
 /.config.old
-!/.config
 /.toolchain_build_ver
 /bin
 /build_dir

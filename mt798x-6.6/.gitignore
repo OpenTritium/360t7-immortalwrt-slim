@@ -5,7 +5,6 @@
 /dl/*
 /.config
 /.config.old
-!/.config
 /.toolchain_build_ver
 /bin
 /build_dir
@@ -37,10 +36,14 @@ git-src
 .ccache
 .vscode*
 
+# 构建日志
+*.log
+
+# 注意：这里不要再写 `/dl`。第 5 行已用 `/dl/*` 忽略全部，下面三条豁免
+# 把「无 PKG_SOURCE_URL、必须随仓库分发」的 vendor 源码放回来。
+# 曾经在文件末尾多了一行 `/dl`，按 gitignore 的「最后匹配优先」规则
+# 把豁免全部推翻，导致这些文件始终无法入库 —— 表现为新克隆构建时
+# bzcat: Can't open input file dl/datconf-*.tar.bz2。
 !/dl/datconf*
 !/dl/mt79*
 !/dl/warp*
-
-# 构建日志
-*.log
-/dl

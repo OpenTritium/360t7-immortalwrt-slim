@@ -11,7 +11,7 @@ root := justfile_directory()
 default:
     @just --list
 
-[doc("在指定树执行 make 目标（默认 world 全量构建；REVISION 读自树内 revision 文件，feeds 按 feeds.conf.default 的 ^sha 固定）")]
+[doc("在指定树执行 make 目标（默认 world 全量构建）")]
 build tree *args="world":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -19,14 +19,21 @@ build tree *args="world":
     [ -f "$revfile" ] || { echo "缺少 $revfile（该文件入库，勿删）" >&2; exit 1; }
     rev="$(tr -d '[:space:]' < "$revfile")"
     [ -n "$rev" ] || { echo "$revfile 为空" >&2; exit 1; }
-    # feeds/ 不入库；新克隆（含 CI）首次构建时按 feeds.conf.default 里固定的
-    # ^sha 拉取，之后不再变动（feeds 脚本对带 sha 的源不做 update）。
     docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} \
         bash -euo pipefail -c '
+            # 顺序不能变，且 .config 必须在 feeds 之后才出现：
+            # scripts/feeds 的 refresh_config()（feeds 脚本 line 878，由
+            # 「feeds update」结尾调用）在发现 .config 存在时会执行
+            # `make defconfig`，而此刻 package/feeds/* 符号链接尚未建立，
+            # 于是 feed 里的包全被当成不存在，.config 被抹掉数千行
+            # （现象：后续 package/install 报 cannot find dependency luci）。
+            # 上游的守卫是「新克隆没有 .config 就直接返回」，所以这里
+            # 不能事先放 .config —— 种子文件放在 defconfig/ 下，feeds 就绪后再注入。
             if [ ! -d feeds/luci ]; then
                 ./scripts/feeds update -a
                 ./scripts/feeds install -a
             fi
+            [ -f .config ] || cp defconfig/360t7-slim.config .config
             exec make -j'"{{jobs}}"' REVISION="'"$rev"'" {{args}}
         '
 
