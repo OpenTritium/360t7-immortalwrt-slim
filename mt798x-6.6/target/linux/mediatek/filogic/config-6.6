@@ -363,21 +363,25 @@ CONFIG_PAGE_POOL_STATS=y
 CONFIG_PAGE_SIZE_LESS_THAN_256KB=y
 CONFIG_PAGE_SIZE_LESS_THAN_64KB=y
 CONFIG_PARTITION_PERCPU=y
+# 360T7 slim：PCIe 上层关闭，仅保留 vendor WiFi 编译所需的 PCI 核
+# MT7981 有 pcie@11280000 控制器，但 SoC dtsi 里 status="disabled"，
+# 360T7 板级 DTS 无任何覆盖 → 控制器永不 probe，端口总线/AER/ASPM 全无对象。
+# 但 CONFIG_PCI 本身不能关：MTK vendor WiFi 的
+# drivers/net/wireless/wifi_utility/Makefile 里 `obj-y += pci_mediatek_rbus.o`
+# 是无条件编译（MT7986 外置卡的 RBUS 路径），编译期引用 pci_scan_root_bus /
+# pci_bus_add_devices / pci_add_resource 等核心 PCI API。
+# 无线卸载不受影响：WED 用 mtk_wed.o/mcu/wo 内部路径，不含 mtk_wed_pcie.o。
 CONFIG_PCI=y
-CONFIG_PCIEAER=y
-CONFIG_PCIEASPM=y
-# CONFIG_PCIEASPM_DEFAULT is not set
-# CONFIG_PCIEASPM_PERFORMANCE is not set
-# CONFIG_PCIEASPM_POWERSAVE is not set
-CONFIG_PCIEASPM_POWER_SUPERSAVE=y
-CONFIG_PCIEPORTBUS=y
-# CONFIG_PCIE_MEDIATEK is not set
-CONFIG_PCIE_MEDIATEK_GEN3=y
-CONFIG_PCIE_PME=y
-CONFIG_PCI_DEBUG=y
 CONFIG_PCI_DOMAINS=y
 CONFIG_PCI_DOMAINS_GENERIC=y
 CONFIG_PCI_MSI=y
+# CONFIG_PCIE_MEDIATEK is not set
+# CONFIG_PCIE_MEDIATEK_GEN3 is not set
+# CONFIG_PCIEPORTBUS is not set
+# CONFIG_PCIEAER is not set
+# CONFIG_PCIEASPM is not set
+# CONFIG_PCIE_PME is not set
+# CONFIG_PCI_DEBUG is not set
 CONFIG_PCS_MTK_LYNXI=y
 CONFIG_PCS_MTK_USXGMII=y
 CONFIG_PERF_EVENTS=y

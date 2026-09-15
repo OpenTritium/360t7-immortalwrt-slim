@@ -359,3 +359,36 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   ⚠️ 坑：若给 wan6 设了 option extendprefix '1'，RA 的 /64 会被上报为
   ipv6-prefix，odhcpd 便误判为"有 PD"，relay 永不激活。本固件不设该项，
   将来也不要设。
+
+【第十二轮：无 modem 相关的精简复核（2026-09-15）】
+
+结论：4G/5G 相关的**包**早已不在固件里，本轮只挖出一处内核死重。
+
+■ 包层面（本来就没有，无需精简）
+  两树 manifest 里 modem 相关命中为零（唯一的 jsonfilter 是 "fi-lte-r" 误匹配）。
+  .config 中 kmod-mhi-*/kmod-wwan/kmod-rmnet/kmod-qrtr-mhi/kmod-usb-net-cdc-mbim/
+  kmod-usb-net-cdc-ncm/kmod-usb-net-qmi-wwan*/kmod-pcie_mhi*/libmbim 等
+  全部 is not set —— 未编译、未安装。
+  package/mtk/applications/5g-modem（12MB 源码）仍在树内，但无任何包被选中，
+  是早先几轮清理后的源码残留，不进固件，删除收益为零，保留以备将来。
+
+■ 内核层面（本轮实际收益）
+  查到 PCIe 整栈仍在编译，而 MT7981 的 pcie@11280000 控制器在 SoC dtsi 里
+  是 status="disabled"，360T7 板级 DTS 对其无任何覆盖 → 永不 probe。
+  该总线的唯一用途是外置无线卡或 4G/5G 模块（M.2），本机都没有。
+  另确认 USB 侧已无可删：CONFIG_USB_SUPPORT 只剩开关与 arch 常量，
+  USB HCD 符号早在前几轮即为 0。
+
+  注意 CONFIG_PCI 本身**不能**关：MTK vendor WiFi 的
+  drivers/net/wireless/wifi_utility/Makefile 里 `obj-y += pci_mediatek_rbus.o`
+  是无条件编译（MT7986 外置卡的 RBUS 路径），编译期引用 pci_scan_root_bus /
+  pci_bus_add_devices / pci_add_resource 等核心 PCI API，关掉即编译失败
+  （已实测报错）。故采取"关上层、留核"的折中。
+  无线卸载不受影响：WED 用的是 mtk_wed.o/mcu/wo 内部路径，不含
+  mtk_wed_pcie.o（MT7986 外置卡专用），WED 代码也无 CONFIG_PCI 条件。
+
+  改动（target/linux/mediatek/filogic/config-6.6|6.12）：
+    CONFIG_PCI / PCI_DOMAINS / PCI_DOMAINS_GENERIC / PCI_MSI  保留
+    PCIE_MEDIATEK_GEN3 / PCIEPORTBUS / PCIEAER / PCIEASPM / PCIE_PME / PCI_DEBUG  关闭
+  实测：vmlinux 中 PCI* 符号 158.3KB -> 132.9KB（6.6）、161.5KB -> 135.5KB（6.12）；
+  WED 符号完好（53/56 个）；sysupgrade 体积 -20KiB 两树一致。
