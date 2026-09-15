@@ -115,6 +115,52 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 > 仍是 public preview）；构建器基础镜像固定在 `ubuntu:24.04` 且**故意不自动升级**——
 > 它承担复现原始构建环境的职责，换基础镜像会改变 glibc/gcc 从而破坏可复现性。
 
+## 代码来源与致谢
+
+本项目是**适配层**，不是从零实现的固件。上游与第三方来源如下：
+
+| 组成 | 来源 | 说明 |
+|---|---|---|
+| 底座（6.6） | [`padavanonly/immortalwrt-mt798x-6.6`](https://github.com/padavanonly/immortalwrt-mt798x-6.6) | ImmortalWrt 24.10，vendor 内核补丁 |
+| 底座（6.12） | [`zheshifandian/immortalwrt-mt798x-6.12`](https://github.com/zheshifandian/immortalwrt-mt798x-6.12) | ImmortalWrt 25.12，mainline flowtable mtkhnat |
+| MTK WiFi 驱动栈 | [`hanwckf/immortalwrt-mt798x`](https://github.com/hanwckf/immortalwrt-mt798x) | mt_wifi / mtwifi-cfg / datconf / conninfra / l1util 的源码直取此处；`192.168.6.1` 默认 LAN 也是这条线的习惯 |
+| **U-Boot + ATF** | [`hanwckf/bl-mt798x`](https://github.com/hanwckf/bl-mt798x) | 设备实际运行的引导器；见下节 |
+| BBRv3 | CachyOS（Peter Jung） | 官方回移植补丁，源码内保留 `From:` 签名 |
+| 其余 feed 包 | ImmortalWrt / OpenWrt 官方 feed | 按 `^sha` 固定，见 `feeds.conf.default` |
+
+我们相对上游所做的改动，可随时导出核对（这也是 `upstream-sync` 的机制）：
+
+```sh
+git clone <上游> /tmp/up && cd /tmp/up && git checkout $(cat <树>/base-upstream)
+# 树目录内容叠加到该基线之上，即为我们的全部改动
+```
+
+## U-Boot
+
+设备的引导器是**社区 U-Boot（`hanwckf/bl-mt798x`）**，不是本仓库构建的那个。两者的区别必须分清：
+
+| | 本仓库 `package/boot/uboot-mediatek` | `hanwckf/bl-mt798x` |
+|---|---|---|
+| 基线 | OpenWrt 主线 U-Boot（6.6 用 2024.10，6.12 用 2025.10） | MediaTek SDK U-Boot + ATF |
+| 产出去向 | 随固件打包，作**设备自带引导器的备份**（`u-boot-mt7981_qihoo_360t7` 是设备符号强制保留项） | **设备实际运行的那个** |
+| 512MB 内存 | 不支持（DDR 时序按 256MB 调） | **支持** —— 时序可训 512MB 颗粒，故改装机刷它 |
+
+因此**不要刷本仓库构建出的 `bl31-uboot.fip` / `preloader.bin`** —— README 顶部那条红线警告说的就是它们。
+
+若需要（重）刷社区 U-Boot：
+
+```sh
+just uboot          # 取 hanwckf/bl-mt798x（按 uboot-revision 固定 commit）并构建
+just uboot-fetch    # 只取/更新源码
+just uboot-status   # 查看固定 commit 与本地状态
+```
+
+产物落在 `out/`：`mt7981_360t7-fip-fixed-parts.bin`（FIP，含 BL2/BL31/U-Boot）与 `mt7981_360t7-bl2.bin`。
+构建使用 `SOC=mt7981 BOARD=360t7`（官方 `build.sh` 支持的 board 名），全程容器内进行。
+
+> ⚠️ 刷写引导器风险远高于刷固件，写错即变砖。相关教程见 hanwckf 的
+> [mt798x uboot 使用说明](https://cmi.hanwckf.top/p/mt798x-uboot-usage)。本仓库只负责构建，不代办刷写。
+
 ## 文档
 
 - [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 九轮优化全过程：裁剪清单、BBRv3 移植、

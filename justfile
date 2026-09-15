@@ -3,7 +3,7 @@
 #   mt798x-6.12 = 新线   （ImmortalWrt 25.12 / 内核 6.12.103 / mtkhnat）
 set shell := ["bash", "-c"]
 
-img  := "mt798x-builder:24.04-v3"
+img  := "mt798x-builder:24.04-v4"
 jobs := `nproc`
 root := justfile_directory()
 
@@ -94,6 +94,45 @@ clean66:
 [doc("清理 6.12 构建产物")]
 clean612:
     @just clean mt798x-6.12
+
+[doc("取/更新 U-Boot 源码（hanwckf/bl-mt798x，按 uboot-revision 固定 commit）")]
+uboot-fetch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rev="$(tr -d '[:space:]' < {{root}}/uboot-revision)"
+    [ -n "$rev" ] || { echo "uboot-revision 为空" >&2; exit 1; }
+    d={{root}}/bl-mt798x
+    if [ ! -d "$d/.git" ]; then
+        git clone --filter=blob:none https://github.com/hanwckf/bl-mt798x "$d"
+    else
+        git -C "$d" fetch --all --tags --quiet
+    fi
+    git -C "$d" -c advice.detachedHead=false checkout --quiet "$rev"
+    echo "bl-mt798x @ $(git -C "$d" rev-parse --short=8 HEAD)（$rev）"
+
+[doc("构建 U-Boot + ATF（hanwckf/bl-mt798x，SOC=mt7981 BOARD=360t7），产物复制到 out/")]
+uboot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just uboot-fetch
+    docker run --rm -v {{root}}/bl-mt798x:/bl -w /bl {{img}} \
+        bash -euo pipefail -c '
+            # ATF 的 makeconfig 找的是 `python` 而非 `python3`；缺它时
+            # defconfig 静默不生效，平台回落到 fvp，最后报 fip build fail。
+            # 只在本配方内补软链，不动构建器镜像（固件构建不受影响）。
+            command -v python >/dev/null 2>&1 ||
+                ln -sf "$(command -v python3)" /usr/local/bin/python
+            exec env SOC=mt7981 BOARD=360t7 ./build.sh
+        '
+    out={{root}}/out
+    mkdir -p "$out"
+    cp -v {{root}}/bl-mt798x/output/mt7981_360t7-* "$out/"
+    ( cd "$out" && sha256sum mt7981_360t7-* )
+
+[doc("只列出 U-Boot 构建会产出的文件（不构建）")]
+uboot-status:
+    @echo "固定 commit: $(cat {{root}}/uboot-revision)"
+    @echo "本地状态  : $(git -C {{root}}/bl-mt798x rev-parse --short=8 HEAD 2>/dev/null || echo '未取源码（just uboot-fetch）')"
 
 [doc("重建 docker 构建器镜像（自包含，FROM ubuntu:24.04）")]
 builder:
