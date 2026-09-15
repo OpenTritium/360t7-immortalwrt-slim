@@ -280,3 +280,40 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
     PCIE_MEDIATEK_GEN3 / PCIEPORTBUS / PCIEAER / PCIEASPM / PCIE_PME / PCI_DEBUG  关闭
   实测：vmlinux 中 PCI* 符号 158.3KB -> 132.9KB（6.6）、161.5KB -> 135.5KB（6.12）；
   WED 符号完好（53/56 个）；sysupgrade 体积 -20KiB 两树一致。
+
+【第十三轮：干净克隆可复现性订正（2026-09-15）】
+新引入的 GitHub CI（build.yml）本质是「干净克隆到干净机器上构建」，
+用它做端到端验证时暴露出两个此前的说法不成立：
+
+1. 构建依赖未入库的 archive/
+   justfile 原先从 archive/*.git 取 REVISION，而 archive/ 在 .gitignore 里。
+   新克隆构建直接 exit 128。已改为：
+     - 树内 revision 文件（入库）作为 REVISION 来源
+     - feeds.conf.default 用 ^sha 固定，feeds/ 不入库、首次构建自动拉取
+   README 原先「任意机器克隆即建，无隐藏本地依赖」的说法就此成立。
+
+2. 提交 .config 反而破坏构建（我们自己引入的回归）
+   把 .config 纳入版本管理后，新克隆必然失败。根因是 scripts/feeds 的
+   refresh_config()（line 878，由「feeds update」结尾调用）：
+   发现 .config 存在就执行 make defconfig，而此刻 package/feeds/* 符号链接
+   尚未建立，feed 里的包被当作不存在，.config 被抹掉数千行
+   （CONFIG_PACKAGE_luci 等消失），后续 package/install 报
+   cannot find dependency luci / lua-cjson / wget-ssl。
+   上游该函数的守卫是「没有 .config 就直接返回」，即假设 .config 由用户后续
+   生成 —— 我们提交它恰好踩中。已改回忽略 .config，内容存
+   defconfig/360t7-slim.config，由 justfile 在 feeds 就绪后注入，且不跑 defconfig。
+
+3. 已发布哈希实际来自旧工具链（重要订正）
+   端到端跑通后比对发现：干净克隆的产物哈希与工作区记录不一致。
+   逐层定位到 staging_dir —— 工作区的工具链编译于 09-14 03:05，
+   早于 version.date（当晚 22:37 引入，用于固定 SOURCE_DATE_EPOCH）。
+   工具链是「只建一次、之后复用」的，所以此前的「位级可复现」只在
+   同一份 staging_dir 内成立；换机器/干净克隆会得到不同产物。
+   本轮起，README 记录的哈希改为**干净克隆**构建的结果，
+   并新增 just distclean66/distclean612（连 staging_dir 一起删）
+   以便在工作区复现干净克隆的哈希。
+
+实测（本次全部在干净克隆中完成，无 archive/、无 .config、无 feeds、无 staging_dir）：
+  6.6  14,142,236 字节  sha256 41915e1c…
+  6.12 15,720,712 字节  sha256 dd7152d9…
+两树构建均 exit 0。

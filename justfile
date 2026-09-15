@@ -83,9 +83,21 @@ pick66 format="sysupgrade":
 pick612 format="sysupgrade":
     @just pick mt798x-6.12 {{format}}
 
-[doc("清理指定树构建产物（容器内执行，可删 root 属主残留；保留工具链/dl 缓存/固件产物）")]
+[doc("清理指定树构建产物（保留工具链/dl 缓存/固件产物；要完全复现干净克隆的哈希需连工具链一并清，见 distclean）")]
 clean tree:
     docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs
+
+[doc("彻底清理指定树：连 staging_dir（工具链）一起删。用于复现干净克隆 / CI 的产物哈希")]
+distclean tree:
+    docker run --rm -v {{root}}/{{tree}}:/build -w /build {{img}} rm -rf build_dir tmp logs staging_dir
+
+[doc("彻底清理 6.6")]
+distclean66:
+    @just distclean mt798x-6.6
+
+[doc("彻底清理 6.12")]
+distclean612:
+    @just distclean mt798x-6.12
 
 [doc("清理 6.6 构建产物")]
 clean66:

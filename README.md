@@ -10,7 +10,7 @@
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
 | 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
-| 产物 |  186 包 / 14.15MB / sha256 `93422303…` |  164 包 / 15.74MB / sha256 `9db2ad54…` |
+| 产物 |  186 包 / 14.14MB / sha256 `41915e1c…` |  164 包 / 15.72MB / sha256 `dd7152d9…` |
 
 ## 成绩单（相对社区原版 full 固件）
 
@@ -92,7 +92,12 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 
 - `REVISION` 来自树内 `revision` 文件（入库），不再依赖未入库的 `archive/`
 - feeds 在 `feeds.conf.default` 里用 `^sha` 固定；`feeds/` 不入库，首次构建自动按固定 sha 拉取
-- 因此同一提交在任意机器上重建，产物 sha256 一致（两树均已验证位级可复现）
+- 因此同一提交在任意机器上重建，产物 sha256 一致
+
+> ⚠️ 上面的哈希来自**干净克隆**（无 `staging_dir`）。若在工作区增量构建，
+> 工具链是早先编译的（可能早于 `version.date` 引入 SOURCE_DATE_EPOCH 的时刻），
+> 产物会与干净克隆不同。要核对本 README 的哈希，用 `just distclean66` 先删掉
+> `staging_dir` 再构建。
 
 ## 自动化
 
@@ -104,6 +109,7 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 | `upstream-sync` | 每日 | 探测上游（padavanonly / zheshifandian），把我们的改动 rebase 到新上游，开 PR；冲突则开 issue |
 | `feeds-update` | 每周一 | 把 feeds 的 `^sha` 推进到分支 HEAD，构建验证后开 PR |
 | `release` | tag `v*` / 手动 | 两树全量构建 → **重建比对哈希**（不可复现则拒绝发布） → GitHub Release |
+| `uboot` | 手动 / `uboot-revision` 变更 | 构建社区 U-Boot + ATF（`hanwckf/bl-mt798x`，`SOC=mt7981 BOARD=360t7`），产物存 artifact |
 
 `auto-merge` 监听 `build` 成功，将带 `automerge` 标签的 PR（feeds-update / Dependabot）squash 合并。
 `upstream-sync` 的 PR **不打该标签**：上游 bump 内核或驱动时编译通过但行为可能变化，需人工核对
