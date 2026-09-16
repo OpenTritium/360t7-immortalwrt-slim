@@ -2,6 +2,7 @@
 .DS_Store
 .*.swp
 /env
+/.qemu-cache
 /dl/*
 # vendor 源码（无 PKG_SOURCE_URL，必须随仓库分发，否则新克隆构建失败）
 !/dl/datconf*

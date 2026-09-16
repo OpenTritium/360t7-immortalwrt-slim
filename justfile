@@ -76,6 +76,18 @@ vm-smoke66:
 vm-smoke612:
     @just vm-smoke mt798x-6.12
 
+[doc("QEMU WebUI：把 guest 的 80 转发到宿主 <port>，用浏览器点 LuCI（同样会先 distclean 重建内核）")]
+vm-webui tree port="8080":
+    tools/qemu-webui.sh {{tree}} {{port}}
+
+[doc("QEMU WebUI：6.12 新线")]
+vm-webui612 port="8080":
+    @just vm-webui mt798x-6.12 {{port}}
+
+[doc("QEMU WebUI：6.6 稳定基线")]
+vm-webui66 port="8080":
+    @just vm-webui mt798x-6.6 {{port}}
+
 [doc("按格式取产物复制到 out/ 并打印 sha256：just pick <tree> <sysupgrade|initramfs|all>")]
 pick tree format="sysupgrade":
     #!/usr/bin/env bash
