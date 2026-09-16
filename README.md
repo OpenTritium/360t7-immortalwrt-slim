@@ -218,7 +218,17 @@ just uboot-fetch    # 只取/更新源码
 just uboot-status   # 查看固定 commit 与本地状态
 ```
 
-产物落在 `out/`：`mt7981_360t7-fip-fixed-parts.bin`（FIP，含 BL2/BL31/U-Boot）与 `mt7981_360t7-bl2.bin`。
+产物落在 `out/`，**两个文件对应两个不同的分区，不是二选一**：
+
+| 文件 | 内容（实测 FIP 的 TOC） | 分区 |
+|---|---|---|
+| `mt7981_360t7-bl2.bin` | BL2（preloader 阶段） | preloader |
+| `mt7981_360t7-fip-fixed-parts.bin` | FIP：BL31 + U-Boot | FIP |
+
+FIP 内的条目可以直接从二进制解出来（TOC 每条 40 字节，UUID 与 TF-A 头文件对得上）：
+`47d4086d…` = `UUID_EL3_RUNTIME_FIRMWARE_BL31`（33,065 字节）、
+`d6d0eea7…` = `UUID_NON_TRUSTED_FIRMWARE_BL33`（723,280 字节，即 U-Boot），随后是全零结束标记
+—— **FIP 里并不含 BL2**，所以 BL2 才会单独出一个文件。
 构建使用 `SOC=mt7981 BOARD=360t7`（官方 `build.sh` 支持的 board 名），全程容器内进行。
 
 这两份也随 **release 一起发布**（`release` workflow 里有一个独立的 `uboot` job，
