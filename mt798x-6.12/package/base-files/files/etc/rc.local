@@ -1,4 +1,14 @@
 # Put your custom commands here that should be executed once
 # the system init finished. By default this file does nothing.
 
+# /dev/net/tun 需要自己建节点 —— 本树内核没编 DEVTMPFS，也没有 mdev/udev；
+# 运行期 /dev 是 procd 挂的一个 512K tmpfs（sbin/init 里的
+# `mode=0755,size=512K`），procd 只 mknod 了 /dev/console、/dev/null、
+# /dev/watchdog，另建 /dev/pts 与 /dev/shm。所以内核即使编了 tun 驱动，
+# 节点也不会自己长出来（Tailscale / OpenVPN 这类需要 tun 的都会卡在这里）。
+# 幂等：已存在就跳过；rc.local 由 /etc/init.d/done 直接 `sh` 执行，
+# 不需要 enable，每次开机必跑。
+mkdir -p /dev/net
+[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200
+
 exit 0

@@ -6,6 +6,8 @@
 【与 full 版对比】（数字随各轮推进变化，最新值见文末「实测」表格）
 - 软件包：306 → 161 个（-145）
 - sysupgrade.bin：17.2MB → 12.93MB（12,933,916 字节，sha256 b3cffb37…）
+  ⚠️ 该哈希是第十七轮**之前**的值；第十七轮加了 kmod-tun，镜像已变，
+  新哈希以 CI 本轮构建产物为准（见 CI artifact 里的 SHA256SUMS）。
 - 纯净性：0 个代理/ddns 类组件（passwall/ssr/clash/v2ray/xray/homeproxy/ddns 全无）
 
 【裁剪内容】
@@ -608,3 +610,42 @@ BBR 覆盖回 cubic 的 bug，都属于「配置写了没生效」，静态手�
   冒烟会写 env/kernel-config 并重建内核 → build_dir 产物哈希偏离出厂值。
   脚本已自带 distclean（因此跑完再 `just build66` 一次即可拿回出厂哈希；
   env/ 已 gitignore，不入库）。
+
+【第十七轮：为后期自行安装 Tailscale 预置内核前置（2026-09-16）】
+需求：固件里**不带** tailscale，但后期要能手动装上。所以本轮只补「必须重刷
+才能有」的那部分 —— 内核侧前置；用户态留给后期 apk 装。
+
+■ 结论：只缺两样，其余都齐
+tailscale 的官方依赖就两个（feed 与上游 openwrt/packages 的 Makefile 一致）：
+    DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +kmod-tun
+  ca-bundle  ✅ 已在
+  kmod-tun   ❌ 缺席（第一轮裁剪时移除），且内核里 **CONFIG_TUN 一行都没有**
+             —— 不是设为 n，是压根没编，所以连 tun.ko 都产不出来
+
+■ 为什么 kmod 不能「后期手动装」
+OpenWrt 的 kmod 包版本里带内核哈希（kmod-tun-<kver>~<hash>-r1），上游下载的
+对不上自编内核；而且内核没开 CONFIG_TUN 就编不出那个 .ko。所以**必须现在编进
+固件并重刷一次**，之后就只剩用户态的 apk 安装。
+
+■ 为什么还要自己建 /dev/net/tun 节点
+实测（本仓库的 QEMU 冒烟可直接观察）：
+  - 内核 `# CONFIG_DEVTMPFS is not set`，没有 devtmpfs
+  - 运行期 /dev 是 procd 挂的 tmpfs：sbin/init 内有字面量
+    `mode=0755,size=512K` + `tmpfs` + `mknod`
+  - procd 只建这些节点：/dev/console、/dev/null、/dev/watchdog，
+    另建 /dev/pts、/dev/shm
+  - 全树没有 mdev / udev，也没有任何 /dev/net 规则
+所以内核即使编了 tun 驱动，/dev/net/tun 也不会自己出现，必须显式 mknod。
+
+■ 本轮改动（两树同步）
+1. 种子：`# CONFIG_PACKAGE_kmod-tun is not set` → `CONFIG_PACKAGE_kmod-tun=y`
+   （该包 KCONFIG:=CONFIG_TUN、AUTOLOAD 30，即开机自动 modprobe）
+2. `package/base-files/files/etc/rc.local`：加幂等的
+   `mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200`
+   放这里是因为 /etc/init.d/done 直接 `sh /etc/rc.local`，**不需要 enable**、
+   每次开机必跑 —— 避开「脚本没被 enable 所以静默没生效」那类坑。
+3. **没有**加 tailscale 本体，也没有加 kmod-nft-tproxy：上游 1.102.3 的
+   DEPENDS 里都没有 tproxy，不塞投机模块。
+
+■ 待办
+镜像内容变了 → 本文档顶部的 sysupgrade 哈希需按新构建刷新（由 CI 产出后更新）。
