@@ -158,6 +158,22 @@ jobs:
 
           刷写方法见 https://cmi.hanwckf.top/p/mt798x-uboot-usage
 
+          ── 刷机顺序（实机验证，三步顺序不能省）──────────────────────
+            0. 用 http://192.168.1.1/uboot.html 刷本页这个 FIP，然后断电重启。
+               旧版 U-Boot（例如 2024-01 的构建）没有 /initramfs.html 路由，
+               也认不了新固件格式，所以这一步是后面两步的前提。
+            1. http://192.168.1.1/initramfs.html 喂固件目录里的 initramfs 镜像 → Boot。
+               这一步零写入；内存系统起来后指示灯由红转绿（led-running）。
+            2. 在内存系统（LuCI）里 系统→备份/刷写固件，上传 sysupgrade 镜像，
+               不勾"保留配置"。
+
+          ⚠️ 6.12 的 sysupgrade.itb 在 U-Boot 的固件槽会被拒
+             （*** Image not supported! ***，报错即停、不写任何东西）——
+             所以第 2 步必须在内存系统里做，别在固件槽直刷。
+          ⚠️ 内存系统与要刷的固件必须同线：6.12 只认 .itb，6.6 只认 tar。
+          ⚠️ 默认 LAN 两棵树不同：6.6 = 192.168.6.1，6.12 = 192.168.1.1
+             （后者与 U-Boot failsafe 同址，不同系统占同一地址）。
+
           ⚠️ 不要拿固件构建目录里顺带产出的 bl31-uboot.fip / preloader.bin 来刷。
              那是 OpenWrt 主线 U-Boot + 官方 256M DDR3 时序，改装机（512M）
              刷了会变砖。它们**故意没有**收录进本 release。
