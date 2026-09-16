@@ -93,6 +93,44 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 改装机刷了变砖 —— 要刷的社区 FIP 在 `out/` 或 release 里，文件名是
 **`mt7981_360t7-fip-fixed-parts.bin`**（没有 `bl31-` 前缀，也不是 `immortalwrt-…` 开头）。
 
+### 先试后刷：用 initramfs 在内存里跑一遍，不写任何 Flash
+
+想确认固件对不对再决定刷不刷，用 U-Boot web 恢复界面的 **Load initramfs** 通道
+（`http://192.168.1.1/initramfs.html`，按钮就是 **Boot**）。
+
+它和 `Firmware update` 槽是**两条不同的代码路径**（`failsafe/failsafe.c`）：
+
+| 上传字段 | 类型 | 上传后做什么 |
+|---|---|---|
+| `firmware` | `FW_TYPE_FW` | `failsafe_write_image()` → **写 ubi** → 重启 |
+| `initramfs` | `FW_TYPE_INITRD` | **跳过写盘**（`st->ret = 0`）→ `boot_from_mem()` → **直接从内存引导** |
+
+```c
+if (fw_type == FW_TYPE_INITRD)
+        st->ret = 0;                          /* 不写 Flash */
+...
+if (upgrade_success) {
+        if (fw_type == FW_TYPE_INITRD)
+                boot_from_mem((ulong)upload_data);   /* 内存引导 */
+        else
+                do_reset(NULL, 0, 0, NULL);          /* 写盘后重启 */
+}
+```
+
+步骤：进 failsafe（RESET 通电 ≥15s、电脑固定 IP `192.168.1.100`）→
+打开 `http://192.168.1.1/initramfs.html` → 选 `…-initramfs-recovery.itb`（6.12）
+或 `…-initramfs-kernel.bin`（6.6）→ 点 **Boot**。
+NAND 一个字节都不写，不满意直接重启回原系统。
+
+前置条件：镜像是合法 FIT（webui 会 `fdt_check_header` 校验）—— 上面两个都满足。
+
+> ⚠️ 它验证的是「**固件本身能不能起、功能对不对**」，不是「你现有配置迁移后对不对」：
+> 内存系统跑的是 RAM rootfs + 镜像自带的默认配置，**读不到 NAND 上的 overlay**，
+> 改配置也不落盘（页面自己会写 `System running in recovery (initramfs) mode`）。
+
+> 另一条同样不写盘的路是串口启动菜单里的 **Load image**（`mtkload` → `bootm`），
+> 但这个 defconfig 只开了 TFTP 一种来源（`Cmd/LOADB/SD/RAM` 都没开），要自己架 TFTP，不如 web 省事。
+
 ### 谁写哪个分区：会不会把 U-Boot 顶掉
 
 **结论：没有任何一份「固件镜像」会写多个分区。刷固件永远只写 `ubi`；
