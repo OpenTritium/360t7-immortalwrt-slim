@@ -40,6 +40,14 @@ build tree *args="world":
                 ./scripts/feeds update -a
                 ./scripts/feeds install -a
             fi
+            # in-tree 的 luci 包在容器里没有 git 可用（只挂载了 tree，.git 在仓库
+            # 根），于是 luci.mk 的 findrev 走「无 git 就取包源码最新 mtime」这条
+            # 回退路径，把 **checkout 时刻**编成版本号（形如 0.260916.28800，尾数
+            # 是当日秒数）——同一提交换个时间 checkout 就得到不同产物哈希。
+            # 实测：mtime=08:00:00Z → 0.260916.28800；mtime=20:00:00Z → 0.260916.72000。
+            # 把 in-tree 包的 mtime 钉到 version.date（= SOURCE_DATE_EPOCH 的锚点），
+            # 这条回退路径就只依赖入库内容。feed 里的包自带 .git，走 git 分支不受影响。
+            find package -exec touch -h -d "@$(cat version.date)" {} +
             cp defconfig/360t7-slim.config .config
             exec make -j'"{{jobs}}"' REVISION="'"$rev"'" {{args}}
         '

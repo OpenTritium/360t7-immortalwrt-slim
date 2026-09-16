@@ -48,21 +48,30 @@ IPv6 透传与内网穿透（含 UPnP）按实际组网场景做了预置，见[
 
 ## 刷机
 
-三条路都能刷，**没有一条会动 U-Boot**（依据见[安全边界](#安全边界谁写哪个分区)）。产物都在
-`<树>/bin/targets/mediatek/filogic/`。跨线刷机（6.6 ↔ 6.12）不保留配置。
+**真机验证过的完整流程**（360T7M 改装 512M，2026-09-16 实测；三步顺序不能省）：
 
-| 方式 | 6.6 | 6.12 | 适用 |
+| 步 | 做什么 | 为什么 |
+|---|---|---|
+| 0 | **更新 U-Boot**：failsafe → `http://192.168.1.1/uboot.html` → 选 `mt7981_360t7-fip-fixed-parts.bin` | 旧版 U-Boot（实测那台是 2024-01 的构建）**没有 `/initramfs.html` 路由**，也认不了新格式；这一步是后面两步的前提 |
+| 1 | **喂 initramfs**：`http://192.168.1.1/initramfs.html` → 选 `…-initramfs-recovery.itb` → 点 **Boot** | 零写入。内存系统起好后指示灯**由红转绿**（`led-running`） |
+| 2 | **在内存系统里刷固件**：LuCI → 系统 → 备份/刷写固件 → 上传 `…-squashfs-sysupgrade.itb` → **不勾"保留配置"** | 这一跳走 OpenWrt 自己的 `fit_do_upgrade`，与 U-Boot 的镜像类型分派无关，所以必成 |
+
+⛔ **不要**在 U-Boot 的固件槽直刷 6.12 的 `sysupgrade.itb`：会被 `*** Image not supported! ***`
+拒绝（该槽按镜像类型分派，FIT 不在它认的列表里）—— **实机已验证**。好消息是它报错即停，
+**不写任何东西**。
+
+| 树 | 内存系统默认 LAN | 内存系统里刷哪个 | U-Boot 固件槽直刷 |
 |---|---|---|---|
-| 系统内 sysupgrade | `…-squashfs-sysupgrade.bin` | `…-squashfs-sysupgrade.itb` | 常规升级，保留/清空配置可选 |
-| U-Boot web 固件槽 | 见下方注① | `…-squashfs-sysupgrade.itb` | 系统起不来时的救砖 |
-| 先试后刷（推荐首次） | `…-initramfs-kernel.bin` | `…-initramfs-recovery.itb` | 只想先确认固件对不对，**零写入** |
+| 6.6 | `192.168.6.1` | `…-squashfs-sysupgrade.bin`（tar） | 未真机验证（tar 是其原生格式：`parse_tar_image` 认 `sysupgrade-*/kernel\|root`，我们的 tar 正是这个形状） |
+| 6.12 | `192.168.1.1` | `…-squashfs-sysupgrade.itb` | ⛔ 会被拒（实机验证） |
 
-① 6.6 的 `sysupgrade.bin` 是 tar 格式。这份社区 U-Boot 的 tar 解析器
-（`board/mediatek/common/untar.c` 的 `parse_tar_image`）要的正是
-`sysupgrade-*/kernel` 与 `sysupgrade-*/root` 两个条目 —— 我们的 tar 恰好就是这个形状
-（`tar tvf` 可见 `sysupgrade-qihoo_360t7/{CONTROL,kernel,root}`），且本仓库构建的 U-Boot
-里 `CONFIG_MTK_UPGRADE_IMAGE_VERIFY` 是关的、不会按类型拒绝。**但这条路径未在真机验证**，
-所以 6.6 仍推荐走 initramfs 保底：进内存系统后再 sysupgrade。
+⚠️ **默认 LAN 两棵树不同**（`package/base-files/files/bin/config_generate`）：6.6 改成了
+`192.168.6.1`，6.12 保留上游默认 `192.168.1.1`。6.12 的 LAN 正好与 **U-Boot failsafe** 同址 ——
+不同系统占同一地址，不冲突，但要知道"现在是谁在回答"：跑固件时是固件，
+要进 failsafe 必须断电**按住 RESET ≥15 秒**。
+
+⚠️ **内存系统与要刷的固件必须同线**：6.12 的 `platform.sh` 只认 `.itb`（`fit_do_upgrade`），
+6.6 只认 tar（`nand_do_upgrade`）—— 跨线在系统内刷不了。
 
 ### 先试后刷
 
@@ -108,9 +117,10 @@ NAND 一个字节都不写，不满意直接重启回原系统。
 
 | 你要做什么 | 用哪个文件 | 入口 |
 |---|---|---|
-| 刷**固件** | `…-squashfs-sysupgrade.{itb,bin}`（见注①） | `http://192.168.1.1` → 固件槽 |
-| **只试不刷** | `…-initramfs-{recovery.itb,kernel.bin}` | `http://192.168.1.1/initramfs.html` |
 | 更新 **U-Boot 自己**（webui） | `out/mt7981_360t7-fip-fixed-parts.bin`（**FIP**） | `http://192.168.1.1/uboot.html` → 选 FIP |
+| **引导内存系统**（零写入） | `…-initramfs-{recovery.itb,kernel.bin}` | `http://192.168.1.1/initramfs.html` → **Boot** |
+| 刷**固件**（6.6 的 tar） | `…-squashfs-sysupgrade.bin` | `http://192.168.1.1` → 固件槽（未真机验证） |
+| 刷**固件**（6.12） | ⛔ 直刷会被拒 —— 走[上面三步流程](#刷机)的第 1、2 步 | — |
 | 更新 **U-Boot 自己**（串口） | 同上，还是那个 FIP | U-Boot 控制台 `mtkupgrade fip`（走 TFTP） |
 
 ⛔ **更新 U-Boot 时千万别选** `…-bl31-uboot.fip` / `…-preloader.bin`（见[产物清单](#产物清单哪个文件归哪种机器)第 5、6 行）。
@@ -176,7 +186,7 @@ U-Boot 用探测到的真实容量改写（`dram_init()` 的 `get_ram_size()` �
 ¹ 社区 U-Boot（`just uboot` 构建，来源 `hanwckf/bl-mt798x`，按 `uboot-revision` 固定
 commit）——**设备实际运行的那个**，也是 release 里附带的那两个文件。
 刷写走 U-Boot 的 failsafe webui（见[上一节](#在-u-boot-里刷)）。
-注意 `192.168.1.1` 是 **U-Boot 的 IP**，别和固件的 LAN IP `192.168.6.1` 搞混。
+注意 `192.168.1.1` 是 **U-Boot failsafe 的地址**；6.12 固件的默认 LAN 也是它（6.6 是 `192.168.6.1`）—— **同址但不同系统**，别搞混谁在回答。
 
 ² FIP 里只有 BL31 + U-Boot 两个组件（解 TOC 可见 `47d4086d…`=BL31、
 `d6d0eea7…`=BL33/U-Boot，随后是结束标记），**不含 BL2**；BL2 单独出文件是给
@@ -295,28 +305,33 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 - `REVISION` 来自树内 `revision` 文件（入库），不再依赖未入库的 `archive/`
 - feeds 在 `feeds.conf.default` 里用 `^sha` 固定；`feeds/` 不入库，首次构建自动按固定 sha 拉取
   （只保留 `packages` 与 `luci` 两条——`routing`/`telephony`/`video` 对本目标 0 贡献，见第十四轮）
+- in-tree 包的 mtime 会被钉到 `version.date` —— 否则 in-tree luci 包的版本号取自
+  checkout 时刻，产物不可复现（根因与实测见[哈希与复现性](#哈希与复现性)）
 - 因此同一提交在同一构建环境快照下重建，产物 sha256 一致（`release` workflow 每次发布前
   都用 `sha256sum -c` 双构建核对，不一致即拒绝发布；本地干净克隆也复核过）
 
 ### 哈希与复现性
 
-本仓库的核心不变量是「**一个提交 + 一个种子 = 一个产物**」。两棵树都做过位级确定性验证
-（同一提交连跑两次，sha256 完全相同），`release` workflow 每次发布前还会重建比对哈希，
-不一致直接拒绝发布。
+核心不变量是「**一个提交 + 一个种子 = 一个产物**」：`release` workflow 每次发布前都先
+`just distclean` 再**重建一次**，用 `sha256sum -c` 比对，不一致即拒绝发布。
 
-| 轮次 | 提交 | 6.6 `sysupgrade.bin` | 6.12 `sysupgrade.itb` |
+| 提交 | 6.6 `sysupgrade.bin` | 6.12 `sysupgrade.itb` | 怎么验证的 |
 |---|---|---|---|
-| 第十四轮 | `e01999ad` | `b3cffb37…` · 12,933,916 B · 161 包 | `84cd39bf…` · 15,458,568 B · 159 包 |
-| 第十七轮 | `bfbddb89` | 与上不同（加了 `kmod-tun`），真值见下 | 同左 |
+| `e01999ad`（第十四轮） | `b3cffb37…` · 12,933,916 B · 161 包 | `84cd39bf…` · 15,458,568 B · 159 包 | 本地干净克隆 + CI 双构建，字节一致 |
+| `5a9c72bf`（tag `v2026.09.16`） | `37595ded…` | `0af41b99…` | 见该 release 的 `SHA256SUMS` |
 
-第十七轮给内核补了 `kmod-tun` + `/dev/net/tun`（Tailscale 前置），**镜像已变**，
-上表第十四轮那两个哈希不再是当前值 —— 本轮真值以 CI 本轮产物里的 `SHA256SUMS` 为准。
-详见各自 `README-slim.txt` 的第十一轮（复现做法）与第十七轮（本轮改动）。
+> ⚠️ **实测到过一个破坏可复现性的 bug（已修）**：同一次 CI run 里两个 job 构建**同一个提交**，
+> `reproducible` 得出 `ebed88a2…`、`release` 得出 `37595ded…` —— 两次都不算错，但**互不相等**。
+> 根因：容器只挂载了 tree 目录（`.git` 在仓库根、没进容器），in-tree 的 luci 包没有 git 可用，
+> `luci.mk` 的 `findrev` 于是回退到「取包源码最新的 mtime」当版本号
+> （`0.<日期>.<当日秒数>`）—— 版本号被 **checkout 时刻** 决定，自然每次 checkout 都不同。
+> 修法：`justfile` 在构建前把 in-tree 包的 mtime 钉到 `version.date`（= SOURCE_DATE_EPOCH 锚点）。
+> 复现/确认：同一个包在 mtime=08:00:00Z 与 20:00:00Z 两种"checkout"下，
+> **修前**得到 `0.260916.28800` / `0.260916.72000`，**修后**都是 `0.260913.66371`。
 
-> ⚠️ 核对哈希必须用**干净克隆**（无 `staging_dir`）。若在工作区增量构建，
-> 工具链是早先编译的（可能早于 `version.date` 引入 SOURCE_DATE_EPOCH 的时刻），
-> 产物会与干净克隆不同。要核对本 README 的哈希，用 `just distclean66` 先删掉
-> `staging_dir` 再构建。
+> ⚠️ 核对哈希必须用**干净克隆**（无 `staging_dir`）。在工作区增量构建，工具链是早先编译的
+> （可能早于 `version.date` 引入 SOURCE_DATE_EPOCH 的时刻），产物会与干净克隆不同。
+> 要核对就先 `just distclean66` 删掉 `staging_dir` 再构建。
 
 ### QEMU 冒烟（`just vm-smoke*`）
 

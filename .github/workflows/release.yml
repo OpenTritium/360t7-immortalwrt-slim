@@ -229,7 +229,10 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [release, uboot]
+    # prepare 必须列进来：Actions 的 needs.<job> 只能取**直接依赖**的 output，
+    # 只写 [release, uboot] 的话 needs.prepare.outputs.tag 会静默展开成空串
+    # （release → prepare 只是传递依赖）→ gh release create "" 直接失败。
+    needs: [prepare, release, uboot]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
