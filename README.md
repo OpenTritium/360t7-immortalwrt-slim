@@ -165,7 +165,7 @@ MT7981 没有 QEMU 机型，所以此前一切验证都是静态的（ELF NEEDED
 | `build` | push/PR | 干净 runner 上全量构建两树，产出 artifact + SHA256SUMS。**这是下面几条的门禁** |
 | `upstream-sync` | 每日 | 探测上游（padavanonly / zheshifandian），把我们的改动 rebase 到新上游，开 PR；冲突则开 issue |
 | `feeds-update` | 每周一 | 把 feeds 的 `^sha` 推进到分支 HEAD，构建验证后开 PR |
-| `release` | tag `v*` / 手动 | 两树全量构建 → **重建比对哈希**（不可复现则拒绝发布） → GitHub Release |
+| `release` | tag `v*` / 手动 | 两树全量构建 → **重建比对哈希**（不可复现则拒绝发布） → GitHub Release（含固件 + **社区 U-Boot** + 各自 SHA256SUMS） |
 | `uboot` | 手动 / `uboot-revision` 变更 | 构建社区 U-Boot + ATF（`hanwckf/bl-mt798x`，`SOC=mt7981 BOARD=360t7`），产物存 artifact |
 
 `auto-merge` 监听 `build` 成功，将带 `automerge` 标签的 PR（feeds-update / Dependabot）squash 合并。
@@ -220,6 +220,11 @@ just uboot-status   # 查看固定 commit 与本地状态
 
 产物落在 `out/`：`mt7981_360t7-fip-fixed-parts.bin`（FIP，含 BL2/BL31/U-Boot）与 `mt7981_360t7-bl2.bin`。
 构建使用 `SOC=mt7981 BOARD=360t7`（官方 `build.sh` 支持的 board 名），全程容器内进行。
+
+这两份也随 **release 一起发布**（`release` workflow 里有一个独立的 `uboot` job，
+见「自动化」一节），附 `UPSTREAM-COMMIT` 与 `READ-ME-FIRST.txt`（写清哪个文件该刷、
+以及为什么固件目录里那两个 `bl31-uboot.fip`/`preloader.bin` 绝不能刷）。
+不想等 release 也可以单独取：`uboot` workflow 的 artifact，或本地 `just uboot`。
 
 > ⚠️ 刷写引导器风险远高于刷固件，写错即变砖。相关教程见 hanwckf 的
 > [mt798x uboot 使用说明](https://cmi.hanwckf.top/p/mt798x-uboot-usage)。本仓库只负责构建，不代办刷写。

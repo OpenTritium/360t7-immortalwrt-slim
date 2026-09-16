@@ -2,8 +2,19 @@ name: release
 
 # 自动 release。
 #
-# 触发：打 tag（v*）或手动。产物：两条线的 sysupgrade / initramfs（4 个镜像）
-# + manifest + config.buildinfo + feeds.buildinfo + SHA256SUMS。
+# 触发：打 tag（v*）或手动。产物：
+#   - 两条线的 sysupgrade / initramfs（4 个镜像）+ manifest
+#     + config.buildinfo + feeds.buildinfo + SHA256SUMS
+#   - **社区 U-Boot**（设备实际运行的那个引导器，`uboot-revision` 钉死 commit）
+#
+# 为什么把社区 U-Boot 也放进 release：它按 `uboot-revision` 独立于固件版本，
+# 但和固件同属「这台机器要用的东西」，放一起省得再去翻 workflow artifact。
+#
+# ⚠️ 别混淆两种 U-Boot：
+#   release 里的 mt7981_360t7-*  = 社区 U-Boot（hanwckf/bl-mt798x）→ 可刷
+#   固件构建顺带产出的 bl31-uboot.fip / preloader.bin
+#                                = OpenWrt 主线 U-Boot + 官方 256M DDR3 时序
+#                                  → 改装机（512M）刷了变砖，**故意不收录**。
 #
 # 额外做一次「可复现性核对」：同一 REVISION 重建必须得到相同 sha256
 # （两树均已验证位级可复现，见 mt798x-*/README-slim.txt）。
@@ -98,6 +109,61 @@ jobs:
             exit 1
           }
 
+  # 社区 U-Boot + ATF。它按 uboot-revision 独立，不受固件改动影响；
+  # 放进 release 是为了「刷机要用的东西在一个地方拿全」。
+  uboot:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 腾出磁盘
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" /usr/local/swift
+          sudo apt-get clean
+
+      - name: 安装 just
+        uses: extractions/setup-just@v4
+
+      - name: 构建构建器镜像
+        run: just builder
+
+      - name: 取源码并构建 U-Boot + ATF
+        run: just uboot
+
+      - name: 收集产物
+        run: |
+          set -euo pipefail
+          mkdir -p rel/uboot
+          cp -v out/mt7981_360t7-* rel/uboot/
+          cp -v uboot-revision rel/uboot/UPSTREAM-REVISION-PIN
+          git -C bl-mt798x rev-parse HEAD > rel/uboot/UPSTREAM-COMMIT
+          cat > rel/uboot/READ-ME-FIRST.txt <<'EOF'
+          360T7M（改装 512M）用的社区 U-Boot + ATF，来源 hanwckf/bl-mt798x。
+          对应上游 commit 见 UPSTREAM-COMMIT / UPSTREAM-REVISION-PIN。
+
+          文件：
+            mt7981_360t7-fip-fixed-parts.bin   FIP（含 BL2/BL31/U-Boot）—— 刷这个
+            mt7981_360t7-bl2.bin               单独的 BL2
+
+          刷写方法见 https://cmi.hanwckf.top/p/mt798x-uboot-usage
+
+          ⚠️ 不要拿固件构建目录里顺带产出的 bl31-uboot.fip / preloader.bin 来刷。
+             那是 OpenWrt 主线 U-Boot + 官方 256M DDR3 时序，改装机（512M）
+             刷了会变砖。它们**故意没有**收录进本 release。
+
+          ⚠️ 刷引导器风险远高于刷固件，写错即变砖。
+          EOF
+          ( cd rel/uboot && sha256sum -- * > SHA256SUMS && cat SHA256SUMS )
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-uboot
+          path: rel/uboot/
+          if-no-files-found: error
+
   release:
     needs: [prepare, reproducible]
     runs-on: ubuntu-24.04
@@ -144,14 +210,18 @@ jobs:
           done
           ( cd "rel/$T" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS )
 
+      # 注意上传的是 rel/（不是 rel/$T/）：upload-artifact 会以「所有文件的
+      # 最近公共祖先」为 artifact 根，这样 artifact 里保留 mt798x-6.6/ 这一层。
+      # 若传 rel/$T/，两棵树的文件会被拍平到同一层，各自的 SHA256SUMS 互相覆盖
+      # —— 下载端的 merge-multiple 会静默丢一份（这个 workflow 在修复前从未跑过）。
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.tree }}
-          path: rel/${{ matrix.tree }}/
+          path: rel/
           if-no-files-found: error
 
   publish:
-    needs: release
+    needs: [release, uboot]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v8
@@ -161,17 +231,23 @@ jobs:
 
       - name: 汇总校验和
         run: |
+          set -euo pipefail
           cd all
-          find . -name SHA256SUMS -exec cat {} \; | sort -k2 > ALL-SHA256SUMS
+          find . -type f -name SHA256SUMS -print0 | sort -z | xargs -0 cat > ALL-SHA256SUMS
           cat ALL-SHA256SUMS
 
       - name: 创建 Release
         env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
         run: |
-          gh release create '${{ needs.prepare.outputs.tag }}' \
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          # merge-multiple 之后是目录树，gh 只收文件，这里显式展开
+          mapfile -t files < <(find all -type f | sort)
+          printf '%s\n' "${files[@]}"
+          gh release create "$tag" \
             --repo '${{ github.repository }}' \
-            --title '${{ needs.prepare.outputs.tag }}' \
+            --title "$tag" \
             --generate-notes \
-            all/* || \
-          gh release upload '${{ needs.prepare.outputs.tag }}' \
-            --repo '${{ github.repository }}' all/* --clobber
+            "${files[@]}" || \
+          gh release upload "$tag" \
+            --repo '${{ github.repository }}' "${files[@]}" --clobber
