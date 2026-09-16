@@ -168,6 +168,20 @@ function wiphy_detect() {
 			else
 				band_info.max_width = 20;
 
+			// MTK 厂商驱动（mt_wifi，非 mac80211）报不全 nl80211 能力：
+			// he_phy_cap=0，且 vht_capa 里没有 160MHz 位，于是 5G 频段只得到
+			// [VHT20, VHT40, VHT80]（实测：ubus iwinfo info 的 htmodes 到 VHT80 就断），
+			// LuCI 的带宽下拉因此没有 160MHz 选项。
+			// MT7981 的 5G 频段本身支持 160MHz/HE，厂商栈（6.6 线的 iwinfo + l1parser）
+			// 也是按这个能力上报的 —— 这里按硬件能力补全。
+			// 条件收紧为「非 2G、已报 VHT、但一条 HE/160 能力都没报」，mac80211 驱动不受影响。
+			if (band_name != "2G" && band_info.vht && !he_phy_cap &&
+			    !((band.vht_capa >> 2) & 0x3)) {
+				band_info.he = true;
+				he_phy_cap = 0x1e;              // HE20|HE40|HE80|HE160
+				band_info.max_width = 160;
+			}
+
 			let modes = band_info.modes = [ "NOHT" ];
 			if (band_info.ht)
 				push(modes, "HT20");
