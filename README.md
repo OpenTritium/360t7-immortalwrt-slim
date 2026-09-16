@@ -93,6 +93,43 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 改装机刷了变砖 —— 要刷的社区 FIP 在 `out/` 或 release 里，文件名是
 **`mt7981_360t7-fip-fixed-parts.bin`**（没有 `bl31-` 前缀，也不是 `immortalwrt-…` 开头）。
 
+### 谁写哪个分区：会不会把 U-Boot 顶掉
+
+**结论：没有任何一份「固件镜像」会写多个分区。刷固件永远只写 `ubi`；
+会动到 U-Boot 的，只有你在 U-Boot 里主动选 `fip` / `bl2` 槽。**
+
+分区布局（社区 U-Boot 的 `mtdparts`）：
+`bl2`(1M) · `Nvram` · `Bdata` · `factory`(2M) · **`fip`(2M)** · `crash` · `crash_log` · `ubi_kernel` / `ubi`(固件所在)
+
+**A. 系统内 sysupgrade** —— 两棵树都只写 ubi：
+
+| 树 | 路径 | 依据 |
+|---|---|---|
+| 6.6 | `nand_do_upgrade`，`CI_UBIPART="ubi"` `CI_KERNPART="kernel"` `CI_ROOTPART="rootfs"` | `filogic/base-files/lib/upgrade/platform.sh` 的 `qihoo,360t7` 分支 |
+| 6.12 | `fit_do_upgrade`：从设备树 `/chosen/rootdisk` 反查出 ubi 卷 → `CI_METHOD="ubi"` → 仍走 `nand_do_upgrade` | `package/utils/fitblk/files/fit.sh` |
+
+镜像里也没有任何"多分区"指令：6.6 的 tar 只有 `CONTROL`（内容仅 `BOARD=qihoo_360t7`）/`kernel`/`root`；
+6.12 的 ITB 元数据只有 `supported_devices` 与 `version`，没有分区字段。
+
+**B. U-Boot 的槽位**（webui 与串口 `mtkupgrade <abbr>` 同一套）—— 来自
+`board/mediatek/common/bootmenu_mtd.c` 的 `mtd_parts[]`：
+
+| 槽位 | abbr | 写哪个分区 | 会不会顶掉 U-Boot |
+|---|---|---|---|
+| Firmware（webui 主页固件槽） | `fw` | **只写 `ubi`** | ❌ 不会 |
+| ATF FIP（`/uboot.html`） | `fip` | `fip` 分区 | ✅ **会** —— 更新 U-Boot 自己 |
+| ATF BL2 | `bl2` | `bl2` 分区 | ✅ **会** —— 更新 preloader（最危险，刷错直接不引导） |
+| BL31 / BL33 of FIP | `bl31` / `bl33` | `fip` 分区内的单个组件 | ✅ 会 |
+
+固件槽还有一层硬保护（即使种子把 `CONFIG_MTK_UPGRADE_IMAGE_VERIFY` 关掉了）：
+`write_firmware` → `mtd_upgrade_image()` 的目标分区写死为 `PART_UBI_NAME`，
+且只处理 `IMAGE_UBI1`（.itb）与 `IMAGE_TAR`（6.6 的 tar）两种类型，
+其它一律 `*** Image not supported! ***` 不写。
+
+**所以真正要小心的只有一件事**：在 `/uboot.html` 选文件时别选错 ——
+社区版叫 `mt7981_360t7-fip-fixed-parts.bin`（可刷），
+主线版叫 `immortalwrt-…-bl31-uboot.fip`（改装机刷了变砖）。
+
 ### 产物清单：哪个文件归哪种机器
 
 **先说结论：固件镜像与内存容量无关，256M 原装机与 512M 改装机通用；
