@@ -232,6 +232,11 @@ FIP 内的条目可以直接从二进制解出来（TOC 每条 40 字节，UUID 
 —— **FIP 里并不含 BL2**，所以 BL2 才会单独出一个文件。
 构建使用 `SOC=mt7981 BOARD=360t7`（官方 `build.sh` 支持的 board 名），全程容器内进行。
 
+> ⚠️ 这份 U-Boot **不是位级可复现的**（与固件不同）：BL31 与 U-Boot 的版本串里带构建时间
+> （`Built : 11:15:31, Sep 16 2026`），同一 commit 换个时间构建就有十几字节差异 ——
+> 实测本地与 CI 同 commit 的两份 FIP **差 14 字节**，差异全在这两处时间戳字符串里。
+> 所以确认"是不是同一份"要**比 `UPSTREAM-COMMIT`，别比哈希**。
+
 这两份也随 **release 一起发布**（`release` workflow 里有一个独立的 `uboot` job，
 见[自动化](#自动化)），附 `UPSTREAM-COMMIT` 与 `READ-ME-FIRST.txt`（写清哪个文件该刷、
 以及为什么固件目录里那两个 `bl31-uboot.fip`/`preloader.bin` 绝不能刷）。
@@ -290,7 +295,8 @@ just builder                        # 重建自包含构建器镜像（FROM ubun
 - `REVISION` 来自树内 `revision` 文件（入库），不再依赖未入库的 `archive/`
 - feeds 在 `feeds.conf.default` 里用 `^sha` 固定；`feeds/` 不入库，首次构建自动按固定 sha 拉取
   （只保留 `packages` 与 `luci` 两条——`routing`/`telephony`/`video` 对本目标 0 贡献，见第十四轮）
-- 因此同一提交在任意机器上重建，产物 sha256 一致
+- 因此同一提交在同一构建环境快照下重建，产物 sha256 一致（`release` workflow 每次发布前
+  都用 `sha256sum -c` 双构建核对，不一致即拒绝发布；本地干净克隆也复核过）
 
 ### 哈希与复现性
 

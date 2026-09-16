@@ -145,8 +145,16 @@ jobs:
           对应上游 commit 见 UPSTREAM-COMMIT / UPSTREAM-REVISION-PIN。
 
           文件：
-            mt7981_360t7-fip-fixed-parts.bin   FIP（含 BL2/BL31/U-Boot）—— 刷这个
-            mt7981_360t7-bl2.bin               单独的 BL2
+            mt7981_360t7-fip-fixed-parts.bin   FIP：BL31 + U-Boot —— 刷这个
+            mt7981_360t7-bl2.bin               单独的 BL2（preloader 阶段）
+
+          实测 FIP 的 TOC 只有两个组件（47d4086d…=BL31、d6d0eea7…=BL33/U-Boot），
+          **不含 BL2**，所以 BL2 才单独出一个文件。正常刷写只需要 FIP。
+
+          ⚠️ 这份 U-Boot 不是位级可复现的：BL31 与 U-Boot 的版本串里带构建时间
+             （如 "Built : 11:15:31, Sep 16 2026"），同一 commit 在不同时间构建
+             会有十几字节差异。要确认"是不是同一份"，看 UPSTREAM-COMMIT，
+             别比哈希 —— 位级可复现只对固件（sysupgrade/initramfs）成立。
 
           刷写方法见 https://cmi.hanwckf.top/p/mt798x-uboot-usage
 
