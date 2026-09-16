@@ -76,6 +76,69 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 
 产物均在 `<树>/bin/targets/mediatek/filogic/`；跨线刷机不保留配置。
 
+### 在 U-Boot 里刷：刷固件用哪个、刷 U-Boot 自己又用哪个
+
+进 failsafe 的方式：**按住 RESET 按钮通电，保持 ≥15 秒**再松开；电脑网卡设成
+**固定 IP `192.168.1.100`**，接路由器任一 LAN 口，浏览器（建议无痕）打开下表的地址。
+
+| 你要做什么 | 用哪个文件 | 入口 |
+|---|---|---|
+| 刷**固件**（6.12） | `<树>/bin/targets/…/*-squashfs-sysupgrade.itb` | `http://192.168.1.1` → 选固件上传 |
+| 刷**固件**（6.6） | ⚠️ U-Boot **不认** `sysupgrade.bin`（那是 tar 格式）→ 只能先喂 `…-initramfs-kernel.bin` 进内存系统，再在系统内 sysupgrade | `http://192.168.1.1` → 选 initramfs 上传 |
+| 更新 **U-Boot 自己**（webui） | `out/mt7981_360t7-fip-fixed-parts.bin`（**FIP**） | `http://192.168.1.1/uboot.html` → 选 FIP 上传 |
+| 更新 **U-Boot 自己**（串口） | 同上，还是那个 FIP | U-Boot 控制台 `mtkupgrade fip`（走 TFTP） |
+
+⛔ **更新 U-Boot 时千万别选** `…-bl31-uboot.fip` / `…-preloader.bin`（见下表第 5、6 行）。
+它们文件名里也有 `uboot.fip`，但那是 OpenWrt **主线**构建 + 官方 256M DDR3 时序，
+改装机刷了变砖 —— 要刷的社区 FIP 在 `out/` 或 release 里，文件名是
+**`mt7981_360t7-fip-fixed-parts.bin`**（没有 `bl31-` 前缀，也不是 `immortalwrt-…` 开头）。
+
+### 产物清单：哪个文件归哪种机器
+
+**先说结论：固件镜像与内存容量无关，256M 原装机与 512M 改装机通用；
+两种机器的差别只体现在引导器。**
+
+为什么固件通用：固件 DTS 里的 `memory@40000000` 只是**占位值**，开机时会被
+U-Boot 用探测到的真实容量改写（`dram_init()` 的 `get_ram_size()` →
+`arch_fixup_fdt()` 重写 `/memory` 节点），所以同一份固件两边都能跑。
+
+| 产物 | 内容 | 256M 原装机 | 512M 改装机 |
+|---|---|---|---|
+| `<树>/bin/targets/…/*-sysupgrade.{bin,itb}` | 固件（kernel + rootfs） | ✅ | ✅ |
+| `<树>/bin/targets/…/*-initramfs-*` | 内存系统（救砖 / U-Boot web 直刷） | ✅ | ✅ |
+| `out/mt7981_360t7-fip-fixed-parts.bin`¹ | **社区** FIP：BL31 + U-Boot | — | ✅ **刷这个** |
+| `out/mt7981_360t7-bl2.bin`¹ | **社区** BL2（preloader） | — | 一般用不到² |
+| `…-bl31-uboot.fip`³ | **OpenWrt 主线** U-Boot | ⚠️ 不建议 | ⛔ **禁止** |
+| `…-preloader.bin`³ | **OpenWrt 主线** BL2 | ⚠️ 不建议 | ⛔ **禁止** |
+
+¹ 社区 U-Boot（`just uboot` 构建，来源 `hanwckf/bl-mt798x`，按 `uboot-revision` 固定
+commit）——**设备实际运行的那个**，也是 release 里附带的那两个文件。
+刷写走 U-Boot 的 failsafe webui：按住 RESET 通电 15 秒 → 电脑设固定 IP
+`192.168.1.100` → 浏览器开 `http://192.168.1.1/uboot.html` → **上传 FIP**。
+这是**社区 U-Boot 的 IP，别和固件的 LAN IP `192.168.6.1` 搞混**。
+
+² FIP 里只有 BL31 + U-Boot 两个组件（解 TOC 可见 `47d4086d…`=BL31、
+`d6d0eea7…`=BL33/U-Boot，随后是结束标记），**不含 BL2**；BL2 单独出文件是给
+「只写 preloader 分区」的场景（修复/编程器）用的，正常刷写流程不需要。
+
+³ **⚠️ 改装机红线**：这两个是 OpenWrt 主线构建 + 官方 **256M DDR3 时序**
+（6.12 用的是 `spim-nand-ddr3-1866`），改装机（512M）刷了变砖，永远不要碰。
+注意**两棵树产出不同**，别记混：
+
+- **6.6 树不产出**这两个文件（设备定义里没有 `ARTIFACT` 行）
+- **6.12 树会产出**，就躺在 `bin/targets/` 里跟固件并列 —— 顺手刷错就是这个
+- 两者都**不在固件 rootfs 内**（`uboot-mediatek` 只 stage 到 `STAGING_DIR_IMAGE`，
+  不装进系统），所以只要不手动去刷 `bin/targets/` 下那两个，就没有误刷风险
+
+它们对本仓库唯一的意义是「target 设备定义要求的构建产物」（种子里
+`CONFIG_PACKAGE_u-boot-mt7981_qihoo_360t7=y` 与 `trusted-firmware-a-mt7981-spim-nand-ddr3*`
+是强制保留项）。
+
+- 对**改装机（512M）**：⛔ **禁止**，256M 时序直接变砖。
+- 对**原装机（256M）**：也是 ⚠️ **不建议**。它会把设备上正在跑的社区 U-Boot
+  顶掉，而两者分区布局不同（社区版按 108M 大分区固定 mtdparts），
+  顶掉之后现有固件大概率起不来。**本仓库不提供"刷回主线 U-Boot"的路径。**
+
 ## 构建
 
 全量约半小时（14 核），工具链与 dl 缓存跨次复用。
