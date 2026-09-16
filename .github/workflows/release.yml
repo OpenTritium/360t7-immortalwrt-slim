@@ -268,13 +268,23 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ needs.prepare.outputs.tag }}'
-          # merge-multiple 之后是目录树，gh 只收文件，这里显式展开
-          mapfile -t files < <(find all -type f | sort)
-          printf '%s\n' "${files[@]}"
+          # gh 拿「文件名」当资产名，且同一 release 内资产名必须唯一 ——
+          # 两棵树都有 SHA256SUMS / config.buildinfo / feeds.buildinfo / *.manifest，
+          # 直接传会 422（首次实跑就是卡在这类重名上）。这里摊平，并给嵌套层的
+          # 文件加树前缀：mt798x-6.6/bin/.../x.bin → mt798x-6.6-<basename>。
+          mkdir -p flat
+          while IFS= read -r f; do
+            case "$f" in
+              all/mt798x-*/*) n="$(printf '%s' "${f#all/}" | tr '/' '-')" ;;
+              *)              n="$(basename "$f")" ;;
+            esac
+            printf '%s  ->  %s\n' "$f" "$n"
+            cp -f "$f" "flat/$n"
+          done < <(find all -type f | sort)
           gh release create "$tag" \
             --repo '${{ github.repository }}' \
             --title "$tag" \
             --generate-notes \
-            "${files[@]}" || \
+            flat/* || \
           gh release upload "$tag" \
-            --repo '${{ github.repository }}' "${files[@]}" --clobber
+            --repo '${{ github.repository }}' flat/* --clobber
