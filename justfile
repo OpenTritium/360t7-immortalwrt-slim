@@ -4,7 +4,9 @@
 set shell := ["bash", "-c"]
 
 img  := "mt798x-builder:24.04-v4"
-jobs := `nproc`
+# 编译并行度默认留 4 核给宿主（14 核机器 → 10），避免构建把机器占满。
+# 想用满：`JOBS=$(nproc) just build66`。
+jobs := env("JOBS", `echo $(( $(nproc) > 4 ? $(nproc) - 4 : 1 ))`)
 root := justfile_directory()
 
 # 列出所有配方
@@ -60,6 +62,18 @@ smoke66:
 [doc("冒烟：6.12 新线")]
 smoke612:
     @just smoke mt798x-6.12
+
+[doc("QEMU 冒烟：在 qemu virt 上真启动固件（内核+完整 rootfs），核验配置真生效。会先 distclean 再用 env/kernel-config 重建内核，产物哈希偏离出厂值；要拿回请再 just build<树>")]
+vm-smoke tree:
+    tools/qemu-smoke.sh {{tree}}
+
+[doc("QEMU 冒烟：6.6 稳定基线")]
+vm-smoke66:
+    @just vm-smoke mt798x-6.6
+
+[doc("QEMU 冒烟：6.12 新线")]
+vm-smoke612:
+    @just vm-smoke mt798x-6.12
 
 [doc("按格式取产物复制到 out/ 并打印 sha256：just pick <tree> <sysupgrade|initramfs|all>")]
 pick tree format="sysupgrade":

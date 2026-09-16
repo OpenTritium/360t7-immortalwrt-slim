@@ -78,14 +78,69 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 
 ## 构建
 
-14 核全量约半小时，工具链与 dl 缓存跨次复用：
+全量约半小时（14 核），工具链与 dl 缓存跨次复用。
+并行度默认**留 4 核给宿主**（14 核 → `-j10`），避免构建期间机器没法干别的；
+想用满核：`JOBS=$(nproc) just build66`。
 
 ```sh
 just build66 / build612             # 6.6 稳定线 / 6.12 新线 全量构建
 just pick66 / pick612 sysupgrade    # 取刷机镜像到 out/（或 initramfs=救砖镜像 / all）
 just smoke66                        # 冒烟：树内全新编译 dnsmasq
+just vm-smoke66 / vm-smoke612       # QEMU 冒烟：qemu virt 上真启动固件（见下）
 just builder                        # 重建自包含构建器镜像（FROM ubuntu:24.04）
 ```
+
+### QEMU 冒烟（`just vm-smoke*`）
+
+MT7981 没有 QEMU 机型，所以此前一切验证都是静态的（ELF NEEDED 闭包、包清单、
+产物哈希）。静态核验查不出「配置写了没生效」——第九轮那个 `default_qdisc=fq`
+缺 `sch_fq`、以及 turboacc 开机把 BBR 覆盖回 cubic 的 bug，就是这么漏过去的。
+
+`tools/qemu-smoke.sh` 把**真实固件**（本树 world 产物的内核 + 完整 rootfs；
+内核额外带 `env/kernel-config` 里的 PL011/virtio 调试符号，其余与出厂一致）在
+`qemu-system-aarch64 -M virt` 上真启动，覆盖「内核引导 → initramfs 解包 →
+`/init` → preinit → procd → UCI 落盘 → 服务常驻」这一段，并断言关键配置真生效：
+
+- 内核引导 + initramfs 解包 + `Run /init as init process`
+- `procd: - early -/- ubus -/- init -` 三阶段
+- `tcp_congestion_control=bbr`、`default_qdisc=fq`（BBRv3 + pacing 真在跑）
+- `net.ipv6.conf.wan.accept_ra = 2`
+- `dhcp.lan.ra=hybrid` / `dhcp.wan6.master=1`（IPv6 中继确实落到 UCI）
+- `upnpd.config.enabled=1`（uci-defaults 生效）
+- procd / ubusd / netifd / odhcpd 四个常驻进程 + `table inet fw4`
+
+两树实测均 **17/17 断言全通过**（6.6 与 6.12 同一套哨兵断言）。
+
+实现上有几处必须照做（脚本内已注释，改动前先读）：
+
+1. initramfs 不是内建的，而是 FIT 里的 `initrd-1` 节点、**xz 压缩**，需按偏移抽出。
+   两树产物名不同：6.6 出 `initramfs-kernel.bin`，6.12 出 `initramfs-recovery.itb`。
+2. 重打包必须 `xz --check=crc32` 且单流——本树内核只编了 CRC32，默认 CRC64 与
+   `-T0` 多块流会被内核解码器**静默**拒绝（现象：`Freeing initrd memory` 之后
+   直接 panic "Unable to mount root fs"，看不到 `Run /init`）。
+3. 必须禁用 `conninfra`/`mt_wifi`/`mtk_warp`/`mtkhnat` 的模块自加载——无 MT7981
+   寄存器时 conninfra 会 NULL 解引用 panic。
+4. 调试符号走 `<tree>/env/kernel-config`（`LINUX_KCONFIG_LIST` 末尾 → 合并优先级
+   最高）。6.12 比 6.6 多出 `CONFIG_NSM`/`CONFIG_VIRTIO_DEBUG` 两个 `depends on
+   VIRTIO` 的符号，env 打开 VIRTIO 后它们才首次可见，非交互的 `syncconfig`
+   碰到 `(NEW)` 会去读 stdin 然后失败——脚本已把两者写死为默认值 `n`。
+5. `docker run` 要带 `-i` 且 stdin 给 `/dev/null`（同上 syncconfig 读 stdin 的坑）。
+6. 必须先 `distclean`：env 会改内核哈希，`build_dir` 里上轮的 kmod 仍带旧哈希，
+   `package/install` 会报 `cannot find dependency kernel (= <hash>)`。
+
+> ⚠️ 该冒烟需要写 `<tree>/env/kernel-config` 以打开 PL011 串口 / virtio，因而会
+> **重建内核**，使 `build_dir` 的产物哈希偏离出厂值。脚本已自带 `distclean`，
+> 跑完要拿回出厂哈希请再 `just build<树>` 一次即可。
+> `env/` 已在 `.gitignore` 内，不会入库。
+>
+> 不需要开 `DEVTMPFS`：initramfs 里 `/dev` 确实是空目录，但内核给 `rdinit` 的
+> fd 0/1/2 直接接在 console 驱动上，用户态写 stdout 不经过 `/dev/console`。
+> 本冒烟就是在 `CONFIG_DEVTMPFS is not set` 的内核上全项通过的。
+>
+> 覆盖不到：mt_wifi 驱动、HNAT/WARP 硬件卸载、NAND/UBI 布局、真实 PHY/交换机。
+> 这些仍只能靠真机刷写验证。
+
+详见 `mt798x-6.6/README-slim.txt` / `mt798x-6.12/README-slim.txt` 的第十五轮记录。
 
 构建在 rootless docker 容器内进行（镜像 v3，dpkg 集合与原镜像逐一比对一致），
 新克隆即可构建，不依赖本机残留：
@@ -170,7 +225,7 @@ just uboot-status   # 查看固定 commit 与本地状态
 
 ## 文档
 
-- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 十四轮优化全过程：裁剪清单、BBRv3 移植、
-  KERNEL_ 通道清扫、分层参数、BBR 覆盖 bug 修复、fq pacing 补装
+- [`mt798x-6.6/README-slim.txt`](mt798x-6.6/README-slim.txt) — 十五轮优化全过程：裁剪清单、BBRv3 移植、
+  KERNEL_ 通道清扫、分层参数、BBR 覆盖 bug 修复、fq pacing 补装、QEMU 冒烟
 - [`mt798x-6.12/README-slim.txt`](mt798x-6.12/README-slim.txt) — 新线移植记录（PRECAL/netif_rx 补丁、
-  mtkhnat 契约差异）、UPnP 栈补齐与同步的对齐策略
+  mtkhnat 契约差异）、UPnP 栈补齐与同步的对齐策略、QEMU 冒烟实测

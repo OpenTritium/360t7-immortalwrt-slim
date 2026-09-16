@@ -1,11 +1,11 @@
 360T7M 自编译 slim 精简版（ImmortalWrt 24.10 底座 + 内核 6.6.133 + MTK 闭源 mt_wifi 7.6.6.1）
-构建时间：2026-09-14
+最近更新：2026-09-15（第十五轮：QEMU 虚拟化冒烟）
 
 本目录产物 = 之前 selfbuild-immortalwrt-mt798x-6.6（full 版）的裁剪优化版。
 
-【与 full 版对比】
-- 软件包：306 → 186 个（-120）
-- sysupgrade.bin：17.2MB → 14.16MB
+【与 full 版对比】（数字随各轮推进变化，最新值见文末「实测」表格）
+- 软件包：306 → 161 个（-145）
+- sysupgrade.bin：17.2MB → 12.93MB（12,933,916 字节，sha256 b3cffb37…）
 - 纯净性：0 个代理/ddns 类组件（passwall/ssr/clash/v2ray/xray/homeproxy/ddns 全无）
 
 【裁剪内容】
@@ -530,3 +530,81 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   （6.12 同样步骤串行跑出来的是 ac_cv_type_pid_t=yes）。
   不是配置问题：单独重跑 `toolchain/gdb/compile` 立即成功。
   结论：本机 14 核不要同时跑两树的 world，串行即可（两条线各自都是全量重编译）。
+
+【第十五轮：QEMU 虚拟化冒烟（2026-09-15）】
+补上本仓库一直缺的一环：**把真固件启动起来**。
+
+此前验证口径全是静态的（ELF NEEDED 闭包、包清单、产物哈希、vmlinux 符号），
+理由是「MT7981 无 QEMU 机型」。这个理由对**硬件路径**成立，但不该就此放弃
+整条启动链——第九轮那个 `default_qdisc=fq` 缺 `sch_fq`、第八轮 turboacc 开机把
+BBR 覆盖回 cubic 的 bug，都属于「配置写了没生效」，静态手段必然漏过。
+
+■ 做法（tools/qemu-smoke.sh，接入 `just vm-smoke66`）
+用 `qemu-system-aarch64 -M virt` 启动本树 world 产物（内核 + 完整 rootfs），跑到交互 shell。
+
+五处必须照做的关键点（都是踩过的坑，脚本内已注释）：
+1. 调试符号走 `<tree>/env/kernel-config`：它在 include/target.mk 的
+   LINUX_KCONFIG_LIST 里**排在最后 → 优先级最高**，且 `/env` 已 gitignore，
+   所以既能开 PL011/virtio，又不动提交的 filogic/config-*。
+   （DEVTMPFS 不在此列、也**不需要**：initramfs 里 /dev 是空目录，但内核给
+   rdinit 的 fd 0/1/2 直接接在 console 驱动上，用户态写 stdout 不经过
+   /dev/console。本冒烟是在 `CONFIG_DEVTMPFS is not set` 的内核上全项通过的。
+   它也无法从这里打开：Kernel/Configure/Default 会把顶层 .config 的
+   CONFIG_KERNEL_* 去前缀后**追加**在合并结果之后，种子里那句
+   `# CONFIG_KERNEL_DEVTMPFS is not set` 会覆盖 env；而直接改顶层 .config
+   又会让构建系统报 "your configuration is out of sync"。）
+2. initramfs 不是内建的（CONFIG_INITRAMFS_SOURCE 为空），而是 FIT 里的
+   `initrd-1` 节点、**xz 压缩**——必须按偏移抽出来喂 -initrd。
+   实测：不喂 → "Freeing initrd memory" 之后直接 panic
+   "VFS: Unable to mount root fs on unknown-block(0,0)"。
+3. 重打包必须 `xz --check=crc32` **且单流**：本树内核只编了 CRC32
+   （CONFIG_XZ_DEC_CRC64 缺席，XZ_DEC_ARM/ARMTHUMB 也全关），而 xz 默认产出
+   CRC64、`-T0` 产出多块流 —— 两者都被内核解码器静默拒绝（现象同上：
+   initramfs 尺寸对、但解不出根）。改 crc32 后即可正常解包。
+4. 必须禁用 vendor MTK 模块自加载（conninfra / mt_wifi / mtk_warp / mtkhnat）。
+   不加则 conninfra 在无 MT7981 寄存器时 NULL 解引用直接 panic：
+   `consys_hw_pwr_on+0x1c/0x274 [conninfra]` + `msg_thread_deinit`。
+   这几个模块与「内核能否引导 + 用户态能否起来」无关，禁掉不影响验收。
+5. 启动前必须先 distclean：env 改动会让内核 vermagic/包哈希变化，而 build_dir 里
+   上一轮编好的 kmod-*.ipk 仍带旧哈希，package/install 会报
+   `cannot find dependency kernel (= <hash>)`。并行构建下这条只有一个光秃秃的
+   "make -r world: build failed"，看不出原因，要用 -j1 V=s 才现形。
+
+■ 实测结论（6.6 树）
+  注：跑的是本树 world 产物，但内核额外带了 env 里的调试符号
+  （PL011/virtio），rootfs 与种子原样一致 —— 除这些调试符号外即为出厂内容。
+  内核：6.6.133 (360t7m-slim@build)，2 CPU，GICv2m，arch_timer 62.5MHz
+  用户态：Freeing initrd → Run /init → init: Console is alive →
+          init: - preinit - → procd: - early -/- ubus -/- init - →
+          交互 shell（ImmortalWrt-798x-24.10 from PadavanOnly banner）
+  常驻：procd(PID1) / ubusd / rpcd / netifd / odhcpd 全部在跑
+  ubus：22 个对象（luci、network.*、dhcp、iwinfo、hotplug.* …）
+  **关键配置真生效**（这是本轮的主要产出）：
+    tcp_congestion_control = bbr       ← BBRv3 内建默认确实生效
+    net.core.default_qdisc = fq        ← 第九轮补的 sch_fq 真在跑
+    upnpd.config.enabled = 1           ← uci-defaults 默认开 UPnP 生效
+    /etc/sysctl.d/98-ipv6-wan.conf → net.ipv6.conf.wan.accept_ra = 2
+    dhcp.lan  = ra=hybrid, ndp=hybrid, dhcpv6=hybrid, ra_slaac=1,
+                ndproxy_routing=1, max_preferred/valid_lifetime=2700/5400
+    dhcp.wan6 = interface=wan6, master=1, ra/ndp/dhcpv6=hybrid, ignore=1
+    （即 IPv6 三条链 hybrid + master 全部落盘，与第十一轮的设计一致）
+    防火墙：nft table inet fw4 已装载；lsmod 55 个模块
+  LuCI：/www/luci-static/resources/view/ 下 bootstrap/firewall/network/status/
+        system/upnp + eqos.js(已删)/package-manager.js/turboacc.js
+
+■ 覆盖边界（务必如实理解）
+  能覆盖：内核引导、initramfs、preinit/procd 流程、UCI/uci-defaults 落盘、
+          用户态服务常驻、防火墙加载、动态链接。
+  不能覆盖：mt_wifi 驱动、HNAT/WARP 硬件卸载、NAND/UBI 分区布局、
+            真实 PHY/交换机、WiFi 射频。
+  故本冒烟**不能替代真机刷写验证**，但能把「配置写了没生效」这类问题挡在刷机之前。
+
+■ 断言结果
+  17/17 全部通过（内核引导 / initramfs 解包 / Run /init / preinit / procd init /
+  CONGMARK=bbr / QDISC=fq / RAMARK=accept_ra = 2 / LAN ra·ndp·dhcpv6=hybrid /
+  WAN6MASTER=1 / WAN6RA=hybrid / UPNP=1 / SVCS=4 / FWMARK=1 / 交互 shell 可达）。
+
+■ 使用注意
+  冒烟会写 env/kernel-config 并重建内核 → build_dir 产物哈希偏离出厂值。
+  脚本已自带 distclean（因此跑完再 `just build66` 一次即可拿回出厂哈希；
+  env/ 已 gitignore，不入库）。

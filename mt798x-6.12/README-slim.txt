@@ -376,3 +376,55 @@ dhcp.wan6.master='1' 必需：relay 只在 master 与 slave 之间转发，没�
   libiberty/regex.c 上失败（configure 探针 ac_cv_type_pid_t 被判 no，
   进而 `#define pid_t int` 与系统 typedef 冲突）。属宿主竞争，
   串行重建即通过。本机请勿同时跑两树。
+
+【第十五轮：QEMU 虚拟化冒烟（2026-09-15）】
+与 6.6 树同一套机制（tools/qemu-smoke.sh，接入 `just vm-smoke612`），
+补上「把真固件启动起来」这一环。详见 6.6 树第十五轮记录的原理与踩坑，
+此处只记本树差异与实测。
+
+本树与 6.6 的差异点（都是实测踩出来的）：
+- initramfs 产物名不同：6.6 出 initramfs-kernel.bin，本树出 **initramfs-recovery.itb**。
+  两者都是 FIT（kernel-1 / initrd-1 / fdt-1），脚本按两种 glob 顺序找。
+- 本树内核 6.12.103 比 6.6 多两个符号且都 `depends on VIRTIO`：CONFIG_NSM、
+  CONFIG_VIRTIO_DEBUG。env 一开 VIRTIO 它们才第一次可见，非交互的 syncconfig
+  碰到 (NEW) 会去读 stdin 然后失败（现象：world Error 1，只有一行 syncconfig，
+  看不到具体是哪个符号）。已在 env/kernel-config 里写死为默认值 n。
+  定位手段：把 .config.set 拷成 .config 后 `make ARCH=arm64 listnewconfig`
+  —— 它会直接把所有 (NEW) 符号列出来，比拼 .config 快照可靠。
+- `docker run` 必须带 `-i` 且 stdin 给 /dev/null（同上 syncconfig 读 stdin 的坑）。
+- 内核同样只编了 XZ CRC32（CONFIG_XZ_DEC_CRC64 缺席），重打包 initrd 必须
+  `xz --check=crc32` 且单流，否则解包静默失败（现象：Freeing initrd memory
+  之后 panic "Unable to mount root fs"）。
+- vendor 模块自加载要禁用：conninfra / mt_wifi / mtk_warp
+  （本树内核 6.12.103；注意本树无 mtkhnat，与 6.6 略有差异）。
+- 调试符号走 <tree>/env/kernel-config（LINUX_KCONFIG_LIST 末尾 → 最高优先级，
+  /env 已 gitignore）。
+
+■ 实测结论（6.12 树）
+  注：跑的是**同一份 world 产物**，但内核带了 env 里的调试符号
+  （PL011/virtio），rootfs 则是种子原样；所以「出厂」指的是除这些调试符号
+  之外的配置与内容。
+  内核：6.12.103，qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 2 -m 512
+  启动链：Linux version banner → Freeing initrd memory → Run /init as init process
+          → init: Console is alive → init: - preinit - → procd: - early -
+          → procd: - ubus - → procd: - init - → 交互 shell 可达
+  常驻服务：procd / ubusd / netifd / odhcpd 四个全部在跑（SVCS=4）
+  关键配置真生效（与 6.6 逐项一致）：
+    tcp_congestion_control = bbr        net.core.default_qdisc = fq
+    /etc/sysctl.d/98-ipv6-wan.conf → net.ipv6.conf.wan.accept_ra = 2
+    dhcp.lan  = ra=hybrid, ndp=hybrid, dhcpv6=hybrid
+    dhcp.wan6 = master=1, ra=hybrid
+    upnpd.config.enabled = 1（uci-defaults 生效）
+    nft table inet fw4 已装载
+  **断言结果：17/17 全部通过**（与 6.6 树同一套哨兵断言）
+
+■ 覆盖边界
+  与 6.6 相同的边界：本冒烟覆盖内核引导 + 用户态引导 + 配置落盘，
+  覆盖不到 mt_wifi / HNAT / NAND-UBI / 真实 PHY —— 仍需真机刷写验证。
+  价值在于把「配置写了没生效」类问题挡在刷机之前。
+
+■ 使用注意
+  冒烟会写 env/kernel-config 并**重建内核** → build_dir 产物哈希偏离出厂值。
+  脚本第一步已自带 distclean（env 改了内核哈希，不清会撞上
+  "cannot find dependency kernel (= <hash>)"），跑完再 `just build612` 一次
+  即可拿回出厂哈希。env/ 已在 .gitignore 内，不会入库。
