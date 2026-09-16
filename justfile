@@ -4,9 +4,10 @@
 set shell := ["bash", "-c"]
 
 img  := "mt798x-builder:24.04-v4"
-# 编译并行度默认留 4 核给宿主（14 核机器 → 10），避免构建把机器占满。
-# 想用满：`JOBS=$(nproc) just build66`。
-jobs := env("JOBS", `echo $(( $(nproc) > 4 ? $(nproc) - 4 : 1 ))`)
+# 编译并行度：核多时留 4 核给宿主（14 核 → 10），少核机器（含 CI 的 4 vCPU
+# ubuntu-24.04 runner）则用满，避免在 CI 上退化成 -j1。
+# 想显式指定：`JOBS=$(nproc) just build66`。
+jobs := env("JOBS", `echo $(( $(nproc) > 8 ? $(nproc) - 4 : $(nproc) ))`)
 root := justfile_directory()
 
 # 列出所有配方

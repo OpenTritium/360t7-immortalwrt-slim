@@ -81,8 +81,8 @@ echo "== [1/4] 用调试符号重建（内核 + 镜像；不碰出厂 defconfig�
 # build_dir/tmp/logs/staging_dir/.config，dl/ 缓存保留。
 docker run --rm -v "$root/$tree":/build -w /build "$img" \
     rm -rf build_dir tmp logs staging_dir .config .config.old
-# 并行度同样留 4 核给宿主（JOBS 可覆盖，与 justfile 一致）。
-JOBS="${JOBS:-$(echo $(( $(nproc) > 4 ? $(nproc) - 4 : 1 )))}"
+# 并行度与 justfile 同规则：核多留 4 核给宿主，少核机器用满（JOBS 可覆盖）。
+JOBS="${JOBS:-$(echo $(( $(nproc) > 8 ? $(nproc) - 4 : $(nproc) )))}"
 docker run --rm -i -v "$root/$tree":/build -w /build "$img" \
     bash -euo pipefail -c '
         ./scripts/feeds update -a >/dev/null 2>&1 || true
