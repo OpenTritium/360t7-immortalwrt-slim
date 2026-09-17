@@ -28,6 +28,37 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 > 改装机（512M）刷了**变砖**，永远不要碰。这两个文件出现在本仓库 6.12 树的
 > `bin/targets/` 里（6.6 树不产出），顺手刷错就是它。
 
+## 已知限制：5G 上限只有 40MHz（实测，2026-09-17）
+
+**LuCI 里出现 160MHz 选项不代表可用。** 本树 5G 实测封顶 40MHz，裁决点在驱动内部，
+不在 UI/配置层。以下是逐层排除的记录，免得后来人重走一遍。
+
+已确认（设备实测，25.12-SNAPSHOT bd4b8561）：
+
+- 配置层确实请求了 160：`datconf` 读 `mt7981.dbdc.b1.dat` 得 `WirelessMode=17`、
+  `HT_BW=1`、`VHT_BW=2`；重启后驱动仍以 `HE40` 起 AP —— `iwinfo` 的该字段取自
+  驱动 ioctl `OID_802_11_BW`，是驱动实际状态，不是配置回显。
+- 不是 160 专属：请求 80 同样落到 40。
+- 与 uci 无关：两个频段的 `band` 互换后重启，5G 射频仍 40。
+- 不是 HE/AX 特有：改用 `VHT160`（dat 落到 `WirelessMode=15`，PhyMode 不含
+  2.4G-AX 位）后是 `VHT40` —— 两条独立路径都停在 40，指向**信道带宽能力表**。
+- 换 `country`（CN→US）不改变结果。
+- 驱动不重读 dat：`wifi reload` 不触发驱动重新初始化，改 dat 必须重启才生效。
+- 本驱动代次读 EEPROM 走 `ee_flash.c` 的 MTD 路径（`mt_mtd_read_nm_wifi("Factory")`，
+  即 mtd2/2MB），**不是** `/lib/firmware/` 文件路径。
+
+两个"看起来像修复"的坑，都别踩：
+
+- `iwinfo_mtk.c` 的 `mtk_get_htmodelist()` 对任何 `band=5g` **无条件**列出 HE160，
+  与硬件能力无关 —— 早前据此"补回 160 选项"的改动已被 revert（见 `47d4f11a`）。
+- `wlan_config_get_he_bw()`（`config_he.c`）里有一条
+  `if (he_conf.bw > HE_BW_2040 && WMODE_CAP_AX_2G(PhyMode)) he_conf.bw = HE_BW_2040;`
+  看着很像元凶，但 VHT 模式（无 AX 位）同样是 40，说明卡在更下游的信道能力表。
+
+仍未验证 / 下一步：与已知可用的第三方固件（237/hanwckf 系 vendor 驱动构建，默认
+IP 192.168.6.1）逐项对比 `dat`/`sku`/`l1profile`/EEPROM 与驱动代次 —— 这是最快的
+收敛路径。本树 6.12 支持切驱动代次：`CONFIG_MTK_MT_WIFI_DRIVER_VERSION_7661/_7672/_7673`。
+
 ## 成绩单
 
 相对社区原版 full 固件：
