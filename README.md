@@ -9,7 +9,7 @@
 | | 6.6 稳定线 | 6.12 新线 |
 |---|---|---|
 | 底座 | ImmortalWrt 24.10 | ImmortalWrt 25.12（APK 时代） |
-| 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.6.1 |
+| 内核 | 6.6.133 + mt_wifi 7.6.6.1 | 6.12.103 + mt_wifi 7.6.7.3 |
 | 软件包 | 161 | 159 |
 | 固件体积 | 12.93MB | 15.46MB |
 | sha256 | 见[哈希与复现性](#哈希与复现性) | 同上 |
@@ -28,36 +28,56 @@ MT7981B 双核 A53 @1.3GHz · 内存改装 512M · 128M NAND + 108M 大分区社
 > 改装机（512M）刷了**变砖**，永远不要碰。这两个文件出现在本仓库 6.12 树的
 > `bin/targets/` 里（6.6 树不产出），顺手刷错就是它。
 
-## 已知限制：5G 上限只有 40MHz（实测，2026-09-17）
+## 已结案：5G 封顶 40MHz 与 SSID 频段错位（同根因，2026-09-17）
 
-**LuCI 里出现 160MHz 选项不代表可用。** 本树 5G 实测封顶 40MHz，裁决点在驱动内部，
-不在 UI/配置层。以下是逐层排除的记录，免得后来人重走一遍。
+**真凶：`CONFIG_MTK_DEFAULT_5G_PROFILE=y`，关闭即愈（`a83e01bc`）。** 关闭后
+5G 直接以 HE160 起网（LuCI Bitrate 2401 Mbit/s = 2×2 HE160 满速率）。本节早先
+版本记载的排除链及其结论（"裁决点在驱动内部的信道带宽能力表"）**作废**。
 
-已确认（设备实测，25.12-SNAPSHOT bd4b8561）：
+### 机制：mt_wifi 与用户态的顺序契约矛盾
 
-- 配置层确实请求了 160：`datconf` 读 `mt7981.dbdc.b1.dat` 得 `WirelessMode=17`、
-  `HT_BW=1`、`VHT_BW=2`；重启后驱动仍以 `HE40` 起 AP —— `iwinfo` 的该字段取自
-  驱动 ioctl `OID_802_11_BW`，是驱动实际状态，不是配置回显。
-- 不是 160 专属：请求 80 同样落到 40。
-- 与 uci 无关：两个频段的 `band` 互换后重启，5G 射频仍 40。
-- 不是 HE/AX 特有：改用 `VHT160`（dat 落到 `WirelessMode=15`，PhyMode 不含
-  2.4G-AX 位）后是 `VHT40` —— 两条独立路径都停在 40，指向**信道带宽能力表**。
-- 换 `country`（CN→US）不改变结果。
-- 驱动不重读 dat：`wifi reload` 不触发驱动重新初始化，改 dat 必须重启才生效。
-- 本驱动代次读 EEPROM 走 `ee_flash.c` 的 MTD 路径（`mt_mtd_read_nm_wifi("Factory")`，
-  即 mtd2/2MB），**不是** `/lib/firmware/` 文件路径。
+- 开着该开关时，驱动按 **(5G;2G)** 解释 l1profile 的 `profile_path` /
+  `main_ifname`：`rt_channel.c:3012` 注释明说；`multi_profile_check()` 把
+  buf1 取为第二个 token；`multi_profile_merge_5g_only(data, buf2, buf1, …)`
+  故意换序；`rt_profile.c` 的 `l1set_ifname()` 让先初始化的 5G band 抢走 `ra0`。
+- 而 hanwckf wifi-profile 包按规范模板 **(2G;5G)** 写 `l1profile.dat`（驱动
+  自带 INDEX3 模板同序），mtwifi-cfg-ucode / UCI / LuCI 也按 `ra0=2G` 假设。
 
-两个"看起来像修复"的坑，都别踩：
+于是 band↔profile↔netdev 名整体交叉：UCI 的 2G radio 绑到 ra0（驱动里实为
+5G band），LuCI 显示「2.4G SSID 挂在 5G 信道」，内核狂刷 `MlmeEnqueueForRecv
+orig_wdev(0/x)…msg_recv_wdev(1/y)`，且 5G band 吃到交叉后的配置，无论请求
+HE80/HE160 都落到 40 —— 早先那条「5G 上限只有 40MHz」由此而来。
 
-- `iwinfo_mtk.c` 的 `mtk_get_htmodelist()` 对任何 `band=5g` **无条件**列出 HE160，
-  与硬件能力无关 —— 早前据此"补回 160 选项"的改动已被 revert（见 `47d4f11a`）。
-- `wlan_config_get_he_bw()`（`config_he.c`）里有一条
-  `if (he_conf.bw > HE_BW_2040 && WMODE_CAP_AX_2G(PhyMode)) he_conf.bw = HE_BW_2040;`
-  看着很像元凶，但 VHT 模式（无 AX 位）同样是 40，说明卡在更下游的信道能力表。
+### 实测（360T7M 512M，2026-09-17）
 
-仍未验证 / 下一步：与已知可用的第三方固件（237/hanwckf 系 vendor 驱动构建，默认
-IP 192.168.6.1）逐项对比 `dat`/`sku`/`l1profile`/EEPROM 与驱动代次 —— 这是最快的
-收敛路径。本树 6.12 支持切驱动代次：`CONFIG_MTK_MT_WIFI_DRIVER_VERSION_7661/_7672/_7673`。
+| | 关闭前（干净刷入 sysupgrade -n 后 100% 复现） | 关闭后 |
+|---|---|---|
+| ra0（UCI=2G） | "ImmortalWrt-5G" @ ch56/5G | "ImmortalWrt-2.4G" @ ch10/2.4G |
+| rax0（UCI=5G） | "ImmortalWrt-2.4G" @ ch13/2.4G，HE40 | "ImmortalWrt-5G" @ ch52/5G，**HE160** |
+| 跨 band 内核刷屏 | 1074 条+ | 0 |
+
+交叉佐证：/rom 自带的 `/etc/wireless/mediatek/DBDC_card0.dat`（驱动写的合并
+导出，只写不读）字段顺序自相矛盾——`WirelessMode=17;16`（5G 在前）而
+`VHT_BW=0;2`（2G 在前）。「wifi reload 不重读 dat」的现象依然成立。
+
+### 前次排除链为何被误导
+
+先前所有实验都在**交叉态**系统上做：「band 互换后 5G 仍 40」「VHT160 落到
+VHT40」观察到的 40，源头是交叉配置给 5G band 的带宽封顶，而非信道能力表。
+教训：多层命名/配置映射疑似错位时，先核对三方（UCI ↔ l1profile/dat ↔ 驱动
+iwinfo）逐 band 对齐，再做变量隔离。
+
+仍然成立的坑：
+
+- `iwinfo_mtk.c` 的 `mtk_get_htmodelist()` 对任何 `band=5g` **无条件**列出
+  HE160，与实际能力无关 —— 据此"补回 160 选项"的 `d867492a` 已被 `47d4f11a`
+  revert，该 revert 依然正确。
+- `config_he.c` 的 `wlan_config_get_he_bw()` 2G-AX 位钳制与本案无关。
+
+另：上游 hanwckf / zheshifandian 均默认带 `DEFAULT_5G_PROFILE=y`，大概率同样
+带病，值得报。宿主侧实测某 USB 网卡对非关联 BSS 的扫描结果会占位符化（BSSID
+统一 `00:01:02:…`、频率统一 2417 MHz）——SSID/信号可信，BSSID/信道不可信，
+别拿它当信道判据。
 
 ## 成绩单
 
