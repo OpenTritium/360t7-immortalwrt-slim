@@ -88,12 +88,17 @@ iwinfo）逐 band 对齐，再做变量隔离。
 | 固件体积 | 17.2MB | **12.93MB / 15.46MB** | 十七轮裁剪 + zstd-19 squashfs |
 | 软件包数 | 306 | **161 / 159** | USB/存储/代理/DDNS/打印/限速全栈清退，每个幸存包反查过依赖 |
 | 拥塞控制 | BBRv1 | **BBRv3 + fq pacing** | CachyOS 官方回移植（6.6/6.12 两版），内建默认 |
-| NAT 转发 | 软转发 | **硬件卸载** | vendor HNAT（有线）+ WHNAT/WARP（无线）+ fullcone |
+| NAT 转发 | 软转发 | 硬件卸载（⚠️ 开关出厂关，开了实测进黑洞，见下） | vendor HNAT（有线）+ WHNAT/WARP（无线）+ fullcone |
 | 编译参数 | 全树一刀切 | **逐包分层** | 热路径 -O2+LTO，冷路径 -Os，`-mcpu=cortex-a53`，全二进制 sstrip |
 | 内核杂税 | 服务器级默认 | **归零** | cgroups/MPTCP/io_uring/swap/BPF/加固项全部关闭，mitigations=off |
 
 顺带修了两个"设了等于没设"的社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic；
 BBRv3 设了却因内核缺 `sch_fq` 而没有 pacing 队列。
+
+⚠️ **硬件流量卸载别开：实测流量进黑洞。** 两树出厂都未启用加速（6.12 为
+`turboacc.global.set=0`，6.6 初始配置为空），保持关闭即可。打开后 fastpath 走
+vendor HNAT/WARP 快路径，症状是流量黑洞，机制未逐层排查；HNAT/WARP 组件仍随
+固件编译，留给日后排查 mtkhnat 契约差异时实验。
 
 IPv6 透传与内网穿透（含 UPnP）按实际组网场景做了预置，见[预置](#预置光猫路由模式下的-ipv6-与内网穿透)。
 
@@ -326,6 +331,9 @@ FIP 内的条目可以直接从二进制解出来（TOC 每条 40 字节，UUID 
 - `etc/sysctl.d/98-ipv6-wan.conf` — `net.ipv6.conf.wan.accept_ra=2`（转发开启时内核会忽略 `=1`，
   必须用 2，否则路由器自己都拿不到上游地址）
 - `etc/uci-defaults/99-upnp-enable` — UPnP IGD / NAT-PMP / PCP 默认开启
+- `etc/hotplug.d/iface/99-miniupnpd-restart` — wan 口 ifup 后重启一次 miniupnpd：它若早于 wan
+  拿地址启动，PCP/NAT-PMP 的 5351 会绑到过期地址且永不重绑（实机踩坑：tailscale
+  `netcheck` 的 `PortMapping` 为空、打洞退化为纯 DERP 的根因）
 
 三条链缺一不可：`ra` 中继 RA、`ndp` 代理邻居、`dhcpv6` 保住中继 RA 的 M/O 位——
 只配前两条时，上游若为 stateful（RA 置 M、PIO 不带 A），odhcpd 会抹掉 M/O，
