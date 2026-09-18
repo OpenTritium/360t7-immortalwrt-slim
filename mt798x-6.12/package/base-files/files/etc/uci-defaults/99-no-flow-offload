@@ -1,0 +1,9 @@
+#!/bin/sh
+# fw4 的两条卸载开关出厂锁死为关。硬件卸载走 vendor HNAT/WARP 快路径，真机实测
+# 开了会黑洞且内核 panic（pstore 实证：mtk_flow_offload_replace+0x58 oops）；软件
+# 卸载同样绕过 netfilter，会废掉 UPnP/NAT-PMP 映射与 tailscale 打洞。mt_wifi 硬
+# 依赖 HNAT/WARP，模块链无法单独摘除——锁开关是唯一的保险丝。
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
+exit 0

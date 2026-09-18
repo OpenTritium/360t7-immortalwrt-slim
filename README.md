@@ -100,7 +100,9 @@ BBRv3 设了却因内核缺 `sch_fq` 而没有 pacing 队列。
 fastpath 走 vendor HNAT/WARP 快路径；2026-09-18 真机 pstore 抓到实证——某次开启
 后的 boot ~37s，`mtk_flow_offload_replace+0x58` 处 oops，终至 `Kernel panic -
 not syncing: Oops: Fatal exception`。HNAT/WARP 组件仍随固件编译，留给日后排查
-mtkhnat 契约差异时实验。
+mtkhnat 契约差异时实验。**本镜像的处理**：turboacc 面板已从种子移除、fw4 两条
+卸载开关出厂锁死（`99-no-flow-offload`）；mt_wifi 对 HNAT/WARP 是 DEPENDS 硬
+依赖（vendor 驱动拆不开），模块保留但永远休眠。
 
 IPv6 透传与内网穿透（含 UPnP）按实际组网场景做了预置，见[预置](#预置光猫路由模式下的-ipv6-与内网穿透)。
 
@@ -336,6 +338,11 @@ FIP 内的条目可以直接从二进制解出来（TOC 每条 40 字节，UUID 
 - `etc/hotplug.d/iface/99-miniupnpd-restart` — wan 口 ifup 后重启一次 miniupnpd：它若早于 wan
   拿地址启动，PCP/NAT-PMP 的 5351 会绑到过期地址且永不重绑（实机踩坑：tailscale
   `netcheck` 的 `PortMapping` 为空、打洞退化为纯 DERP 的根因）
+- `etc/uci-defaults/99-no-flow-offload` — fw4 的 `flow_offloading / flow_offloading_hw` 出厂锁 0
+  （见[成绩单](#成绩单)⚠️）
+- `etc/uci-defaults/99-tailscale-quiet` — tailscaled 的 stdout/stderr 不进 syslog：路由监控与
+  disco 属 INFO 级却会被标成 err，IPv6 relay 的 NDP 增删一天就刷爆环形缓冲区；镜像未装
+  tailscale 时自动空转
 
 三条链缺一不可：`ra` 中继 RA、`ndp` 代理邻居、`dhcpv6` 保住中继 RA 的 M/O 位——
 只配前两条时，上游若为 stateful（RA 置 M、PIO 不带 A），odhcpd 会抹掉 M/O，

@@ -1,0 +1,9 @@
+#!/bin/sh
+# tailscaled 的 netlink 路由监控/disco 日志是 INFO 级，但经 procd 的 stdout 捕获
+# 会被 syslog 标成 daemon.err——IPv6 relay 每次 NDP 增删 /128 路由各刷两条，
+# 日志环形缓冲区很快被灌满。镜像不含 tailscale 时本脚本静默无效；装了则生效。
+# 运行期状态照常用 `tailscale status` / `tailscale debug` 查看。
+uci -q set tailscale.settings.log_stdout='0'
+uci -q set tailscale.settings.log_stderr='0'
+uci -q commit tailscale
+exit 0
