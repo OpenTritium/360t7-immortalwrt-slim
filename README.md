@@ -343,6 +343,10 @@ FIP 内的条目可以直接从二进制解出来（TOC 每条 40 字节，UUID 
 - `etc/uci-defaults/99-tailscale-quiet` — tailscaled 的 stdout/stderr 不进 syslog：路由监控与
   disco 属 INFO 级却会被标成 err，IPv6 relay 的 NDP 增删一天就刷爆环形缓冲区；镜像未装
   tailscale 时自动空转
+- `etc/uci-defaults/99-dns-hijack` — LAN 侧 `:53`（v4/v6 + TCP）全量 DNAT 回 dnsmasq，
+  DoT `:853` REJECT 防绕过：硬编码 DNS 的设备与 RA relay 拿到上游 RDNSS 的 v6 设备
+  全部收进缓存（运行期命中数看 `ubus call dnsmasq metrics`）；conntrack 余量同步放大
+  262144/UDP stream 300s（`99-perf-tuning.conf`）
 
 三条链缺一不可：`ra` 中继 RA、`ndp` 代理邻居、`dhcpv6` 保住中继 RA 的 M/O 位——
 只配前两条时，上游若为 stateful（RA 置 M、PIO 不带 A），odhcpd 会抹掉 M/O，

@@ -1,0 +1,25 @@
+#!/bin/sh
+# LAN 侧 :53 全量 DNAT 回 dnsmasq（v4/v6 + TCP）：硬编码 DNS 的设备（电视盒子、
+# IoT、写死 8.8.8.8/114 的客户端）与 RA relay 拿到上游 RDNSS 的 v6 设备，全部
+# 收进 8000 条缓存。DoT :853 REJECT 防加密 DNS 绕过，客户端回落明文 53 进缓存。
+# 命名节天然幂等，重复执行安全。
+uci set firewall.dns_hijack=redirect
+uci set firewall.dns_hijack.name='DNS-Hijack'
+uci set firewall.dns_hijack.src='lan'
+uci set firewall.dns_hijack.proto='tcpudp'
+uci set firewall.dns_hijack.src_dport='53'
+uci set firewall.dns_hijack.dest_port='53'
+uci set firewall.dns_hijack.target='DNAT'
+uci set firewall.dns_hijack.family='any'
+
+uci set firewall.dot_block=rule
+uci set firewall.dot_block.name='DoT-Block'
+uci set firewall.dot_block.src='lan'
+uci set firewall.dot_block.dest='wan'
+uci set firewall.dot_block.proto='tcpudp'
+uci set firewall.dot_block.dest_port='853'
+uci set firewall.dot_block.target='REJECT'
+uci set firewall.dot_block.family='any'
+
+uci commit firewall
+exit 0
