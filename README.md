@@ -95,10 +95,12 @@ iwinfo）逐 band 对齐，再做变量隔离。
 顺带修了两个"设了等于没设"的社区级 bug：turboacc 每次开机把拥塞控制覆盖回 cubic；
 BBRv3 设了却因内核缺 `sch_fq` 而没有 pacing 队列。
 
-⚠️ **硬件流量卸载别开：实测流量进黑洞。** 两树出厂都未启用加速（6.12 为
-`turboacc.global.set=0`，6.6 初始配置为空），保持关闭即可。打开后 fastpath 走
-vendor HNAT/WARP 快路径，症状是流量黑洞，机制未逐层排查；HNAT/WARP 组件仍随
-固件编译，留给日后排查 mtkhnat 契约差异时实验。
+⚠️ **硬件流量卸载别开：实测流量进黑洞，内核 panic 有实锤。** 两树出厂都未启用
+加速（6.12 为 `turboacc.global.set=0`，6.6 初始配置为空），保持关闭即可。打开后
+fastpath 走 vendor HNAT/WARP 快路径；2026-09-18 真机 pstore 抓到实证——某次开启
+后的 boot ~37s，`mtk_flow_offload_replace+0x58` 处 oops，终至 `Kernel panic -
+not syncing: Oops: Fatal exception`。HNAT/WARP 组件仍随固件编译，留给日后排查
+mtkhnat 契约差异时实验。
 
 IPv6 透传与内网穿透（含 UPnP）按实际组网场景做了预置，见[预置](#预置光猫路由模式下的-ipv6-与内网穿透)。
 
