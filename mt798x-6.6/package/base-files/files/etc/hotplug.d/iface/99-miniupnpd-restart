@@ -1,0 +1,8 @@
+#!/bin/sh
+# miniupnpd 启动早于 wan 拿到地址时，PCP/NAT-PMP 的 5351 会绑到过期地址
+# 且永不重绑（实机踩坑：tailscale netcheck 的 PortMapping 为空的根因），
+# wan 就绪后重启一次兜底。
+[ "$ACTION" = ifup ] && [ "$INTERFACE" = wan ] || exit 0
+/etc/init.d/miniupnpd enabled || exit 0
+logger -t miniupnpd-hotplug "wan ifup, restarting miniupnpd"
+/etc/init.d/miniupnpd restart
