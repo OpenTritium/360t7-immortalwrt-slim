@@ -1,2 +1,2 @@
-src-git packages https://github.com/immortalwrt/packages.git^0cb6db25afff9a17be88520bc3fdd8f4c79f80de
-src-git luci https://github.com/immortalwrt/luci.git^80ed8a44f244627c5a9f808d09f4c3d8f985b764
+src-git packages https://github.com/immortalwrt/packages.git^27a0f631a93f63bff9865526a9b4a74a10ca82f5
+src-git luci https://github.com/immortalwrt/luci.git^7f9ad99d611a7548125e73b7e375b6d1793ca1ef
