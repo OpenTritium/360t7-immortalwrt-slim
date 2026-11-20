@@ -6,32 +6,40 @@ This repository is worked on ImmortalWrt with MTK OpenWrt Feeds patches imported
 
 ## Commit Cutoff Revisions
 
-### ImmortalWrt: [1d34e7b](https://github.com/immortalwrt/immortalwrt/commit/1d34e7b88708d4eeb3feabe0b2b6f835a909c9c0)
+### ImmortalWrt: [84b665b](https://github.com/immortalwrt/immortalwrt/commit/84b665b5de552e297d0f7d755b88a46fc0cfeb13)
 
 ```
-mediatek: fix merge conflict
+Merge Official Source
 
-Fixes: #2458
-
-Fixes: 3a0e732472ba ("Merge Official Source")
 Signed-off-by: Tianling Shen <cnsztl@immortalwrt.org>
 ```
 
-### MTK OpenWrt Feeds: [511100a](https://github.com/mediatek/mtk-openwrt-feeds/commit/511100a886cf99a12588ccbb810c70928a772027)
+### MTK OpenWrt Feeds: [08196fa](https://github.com/mediatek/mtk-openwrt-feeds/commit/08196fa6e5d338ce88aa0002f781e2d24289b1f1)
 
 ```
-[openwrt-25.12][mt7988][npu][Enable NPU L4S in autobuild defconfig]
+[HIGH][openwrt-25][MAC80211][WiFi7][Fix build failure due to license header]
 
 [Description]
-Enable NPU package and L4S support in mt798x_rfb autobuild defconfig:
-1. Add CONFIG_PACKAGE_kmod-npu=y
-2. Add CONFIG_MTK_NPU_L4S=y
-for both mt7992 and mt7996 25.12 profiles.
+Fix image build failure for MP4.3 release SDK.
+
+[Root Cause]
+Relevant release patch already includes license header, while internal
+commit does not. Hence, duplicate license header is automatically
+added when transforming commit to patch, causing patching conflict.
+
+[Solution]
+Avoid adding duplicate license header.
+
+[Release-log]
+N/A
+
+[How to Verify]
+N/A
 
 [Info to Customer]
 N/A
 
-Change-Id: I124b7f93a7c068ac87cd35343039470276baaf5e
+Change-Id: Ieb659d0c7763cf11ce2e63cc6bdc53cc2f674000
 ```
 
 ### l1parser: [081bb31](https://github.com/chasey-dev/l1parser/commit/081bb31211efc74594d25bfd1bb5811f3408a205)
