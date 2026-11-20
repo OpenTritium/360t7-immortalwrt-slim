@@ -122,15 +122,27 @@ jobs:
             echo "status=conflict" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: 冲突则开 issue
+      # 冲突时开 issue，但**不重复开**：同一棵树只保留一条 open issue 追踪，
+      # 后续冲突在既有 issue 下追加评论。
+      # 否则每天定时跑就每天新建一条 —— 曾连续 34 天刷出 34 条同标题 issue（#1-#34），
+      # 真正的信息全被淹没，且每天都要人工判断"这条和昨天那条是不是同一个问题"。
+      - name: 冲突则开 issue（同一棵树只保留一条）
         if: steps.merge.outputs.status == 'conflict'
         env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
         run: |
+          set -euo pipefail
+          title="上游跟进冲突（${{ matrix.tree }}）"
           cat > /tmp/body.md <<'BODY'
           上游有新提交，但我们相对旧基线的改动无法自动 rebase 过去。
 
           这通常意味着上游改了我们也动过的同一处（内核 bump 跟随、HNAT 契约、
           驱动差异等），**必须人工重放适配**。
+
+          | | |
+          |---|---|
+          | 树 | `TREE` |
+          | 旧基线 | `OLD` |
+          | 新基线 | `NEW` |
 
           本地重放：
 
@@ -140,8 +152,25 @@ jobs:
           # 参照本仓库 TREE/ 的内容手工套用我们的改动
           ```
           BODY
-          sed -i "s#UPSTREAM#${{ matrix.upstream }}#; s#NEW#${{ steps.probe.outputs.new }}#; s#TREE#${{ matrix.tree }}#" /tmp/body.md
-          gh issue create --title "上游跟进冲突（${{ matrix.tree }}）" --body-file /tmp/body.md || true
+          sed -i "s#UPSTREAM#${{ matrix.upstream }}#; s#OLD#${{ steps.probe.outputs.old }}#; s#NEW#${{ steps.probe.outputs.new }}#; s#TREE#${{ matrix.tree }}#" /tmp/body.md
+
+          # 已有同标题的 open issue？→ 只在它下面留评论，不新建
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                        --search "\"$title\" in:title" \
+                        --json number,title \
+                        --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+
+          if [ -n "$existing" ]; then
+            echo "已存在追踪 issue #$existing，追加评论而不新建"
+            {
+              echo "---"
+              echo "本轮仍然冲突（$(date -u +%F)）：\`${{ steps.probe.outputs.old }}\` → \`${{ steps.probe.outputs.new }}\`"
+            } >> /tmp/body.md
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file /tmp/body.md
+          else
+            echo "新建追踪 issue"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/body.md
+          fi
 
       - name: 生成 PR 分支
         if: steps.merge.outputs.status == 'ok'
@@ -153,10 +182,14 @@ jobs:
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -q -b "$br"
+          # ⚠️ dl/ 不能整体排除：本仓库把 4 个 vendor 源码入库
+          # （.gitignore 里有 !/dl/datconf* !/dl/mt79* !/dl/warp*），
+          # 新克隆没有它们会直接构建失败。排除后在下面单独补回来。
           rsync -a --delete \
             --exclude='.git' --exclude='build_dir/' --exclude='staging_dir/' \
             --exclude='tmp/' --exclude='bin/' --exclude='dl/' --exclude='feeds/' \
             /tmp/sync/ "$T/"
+          rsync -a /tmp/sync/dl/ "$T/dl/"
           echo '${{ steps.probe.outputs.new }}' > "$T/base-upstream"
           git add -A
           git commit -qm "上游跟进（$T）：rebase 到 ${{ steps.probe.outputs.new }}"
@@ -184,4 +217,4 @@ jobs:
           gh pr create \
             --title "上游跟进（${{ matrix.tree }}）：$(echo ${{ steps.probe.outputs.new }} | cut -c1-8)" \
             --body-file /tmp/pr.md \
-            --base main --head "${{ env.br }}" || true
+            --base main --head "${{ env.br }}"
